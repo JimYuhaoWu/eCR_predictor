@@ -82,21 +82,30 @@ def score_dbds(dbds: pd.DataFrame, sequence: str) -> pd.Series:
     """
     scores: list[float | object] = []
     cache: dict[str, "motifs.Motif | None"] = {}
+    total = len(dbds)
 
-    for _, row in dbds.iterrows():
+    for i, (_, row) in enumerate(dbds.iterrows(), 1):
+        gene = row.get("gene_symbol") or row.get("name") or "?"
         jid = row.get("jaspar_id")
+
         if not jid or pd.isna(jid):
+            print(f"  [{i}/{total}] {gene}: no JASPAR motif, skipping.", file=sys.stderr)
             scores.append(pd.NA)
             continue
 
         if jid not in cache:
+            print(f"  [{i}/{total}] {gene} ({jid}): fetching motif...", file=sys.stderr)
             cache[jid] = _fetch_jaspar_pwm(jid)
+        else:
+            print(f"  [{i}/{total}] {gene} ({jid}): using cached motif.", file=sys.stderr)
 
         motif = cache[jid]
         if motif is None:
             scores.append(pd.NA)
         else:
             val = _log_odds_score(motif, sequence)
-            scores.append(val if not math.isnan(val) else pd.NA)
+            score = val if not math.isnan(val) else pd.NA
+            print(f"           score: {score}", file=sys.stderr)
+            scores.append(score)
 
     return pd.Series(scores, index=dbds.index, dtype=object)

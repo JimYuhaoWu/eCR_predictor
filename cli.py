@@ -38,8 +38,12 @@ def main(argv: list[str] | None = None) -> None:
 
     # Load and filter DBDs
     from pathlib import Path
+    print("[1/4] Loading DBD library...", file=sys.stderr)
     db_path = Path(args.db) if args.db else None
     dbds = load_dbds(db_path) if db_path else load_dbds()
+    print(f"      {len(dbds)} DBDs loaded.", file=sys.stderr)
+
+    print(f"[2/4] Matching species '{args.species}'...", file=sys.stderr)
     candidates = match_species(dbds, args.species)
 
     if candidates.empty:
@@ -47,14 +51,20 @@ def main(argv: list[str] | None = None) -> None:
             f"WARNING: no DBDs found for species '{args.species}' (exact or genus match).",
             file=sys.stderr,
         )
+    else:
+        n_exact = (candidates["query_species_match"] == "exact").sum()
+        print(f"      {len(candidates)} candidates ({n_exact} exact, {len(candidates)-n_exact} genus fallback).", file=sys.stderr)
 
     # Score
+    print("[3/4] Scanning JASPAR motifs...", file=sys.stderr)
     motif_scores = score_dbds(candidates, sequence)
     confidence = assign_annotation_confidence(candidates)
 
     # Build and emit result table
+    print("[4/4] Writing results...", file=sys.stderr)
     result = build_result_table(candidates, motif_scores, confidence)
     write_output(result, args.output)
+    print("      Done.", file=sys.stderr)
 
 
 if __name__ == "__main__":
