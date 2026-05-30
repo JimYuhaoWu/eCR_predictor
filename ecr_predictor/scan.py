@@ -13,6 +13,7 @@ import io
 import math
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -23,6 +24,18 @@ from Bio.Seq import Seq
 _JASPAR_API = "https://jaspar.elixir.no/api/v1/matrix/{}/?format=jaspar"
 _TIMEOUT = 10  # seconds per request
 _MAX_WORKERS = 8
+_CACHE_DIR = Path(__file__).parents[1] / "jaspar_cache"
+
+
+def _fetch_via_cache(jaspar_id: str) -> "motifs.Motif | None":
+    """Load a pre-fetched .jaspar file from the local cache directory."""
+    path = _CACHE_DIR / f"{jaspar_id}.jaspar"
+    if not path.exists():
+        return None
+    try:
+        return motifs.read(path.open(), "jaspar")
+    except Exception:
+        return None
 
 
 def _fetch_via_local_db(jaspar_id: str) -> "motifs.Motif | None":
@@ -45,7 +58,10 @@ def _fetch_via_rest(jaspar_id: str) -> "motifs.Motif | None":
 
 
 def _fetch_jaspar_pwm(jaspar_id: str) -> "motifs.Motif | None":
-    """Fetch a JASPAR motif, trying local DB then REST API."""
+    """Fetch a JASPAR motif: local cache → BioPython DB → REST API."""
+    motif = _fetch_via_cache(jaspar_id)
+    if motif is not None:
+        return motif
     motif = _fetch_via_local_db(jaspar_id)
     if motif is not None:
         return motif

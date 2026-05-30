@@ -25,7 +25,12 @@ else
     python scripts/03_fetch_cr.py
     python scripts/04_build_library.py
     python scripts/05_validate.py
+    cd "$SCRIPT_DIR"
 fi
+
+# ── 3. Pre-fetch JASPAR motifs into local cache ───────────────────────────────
+echo "Pre-fetching JASPAR motifs..."
+python -m ecr_predictor.prefetch --db "$DB" --cache-dir "$PREDICTOR/jaspar_cache"
 
 echo ""
 echo "Setup complete. Run predictions with:"
