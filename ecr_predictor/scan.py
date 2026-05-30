@@ -4,12 +4,15 @@ JASPAR PWM scanning via BioPython motifs.
 Motif fetch order:
   1. BioPython JASPAR2020 local DB (fast, requires jaspar2020 package)
   2. JASPAR REST API (https://jaspar.elixir.no/api/v1/) — no install needed
+
+Unique JASPAR IDs are fetched in parallel; scoring is sequential.
 """
 from __future__ import annotations
 
 import io
 import math
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import pandas as pd
@@ -19,6 +22,7 @@ from Bio.Seq import Seq
 
 _JASPAR_API = "https://jaspar.elixir.no/api/v1/matrix/{}/?format=jaspar"
 _TIMEOUT = 10  # seconds per request
+_MAX_WORKERS = 8
 
 
 def _fetch_via_local_db(jaspar_id: str) -> "motifs.Motif | None":
@@ -51,6 +55,27 @@ def _fetch_jaspar_pwm(jaspar_id: str) -> "motifs.Motif | None":
     return motif
 
 
+def _fetch_all_parallel(jaspar_ids: list) -> dict:
+    """Fetch all unique JASPAR motifs in parallel. Returns {jaspar_id: motif}."""
+    unique = [jid for jid in set(jaspar_ids) if jid and not pd.isna(jid)]
+    total = len(unique)
+    cache: dict = {}
+
+    print(f"  Fetching {total} unique JASPAR motifs ({_MAX_WORKERS} workers)...", file=sys.stderr)
+
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as executor:
+        futures = {executor.submit(_fetch_jaspar_pwm, jid): jid for jid in unique}
+        done = 0
+        for future in as_completed(futures):
+            jid = futures[future]
+            cache[jid] = future.result()
+            done += 1
+            status = "ok" if cache[jid] is not None else "FAILED"
+            print(f"  [{done}/{total}] {jid}: {status}", file=sys.stderr)
+
+    return cache
+
+
 def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
     """
     Return the maximum log-odds score of a motif scanned against the sequence,
@@ -80,8 +105,10 @@ def score_dbds(dbds: pd.DataFrame, sequence: str) -> pd.Series:
     Compute motif_score for each DBD row against `sequence`.
     Returns a Series indexed like `dbds`; pd.NA where no motif is available.
     """
+    jaspar_ids = dbds["jaspar_id"].tolist()
+    cache = _fetch_all_parallel(jaspar_ids)
+
     scores: list[float | object] = []
-    cache: dict[str, "motifs.Motif | None"] = {}
     total = len(dbds)
 
     for i, (_, row) in enumerate(dbds.iterrows(), 1):
@@ -89,23 +116,16 @@ def score_dbds(dbds: pd.DataFrame, sequence: str) -> pd.Series:
         jid = row.get("jaspar_id")
 
         if not jid or pd.isna(jid):
-            print(f"  [{i}/{total}] {gene}: no JASPAR motif, skipping.", file=sys.stderr)
             scores.append(pd.NA)
             continue
 
-        if jid not in cache:
-            print(f"  [{i}/{total}] {gene} ({jid}): fetching motif...", file=sys.stderr)
-            cache[jid] = _fetch_jaspar_pwm(jid)
-        else:
-            print(f"  [{i}/{total}] {gene} ({jid}): using cached motif.", file=sys.stderr)
-
-        motif = cache[jid]
+        motif = cache.get(jid)
         if motif is None:
             scores.append(pd.NA)
         else:
             val = _log_odds_score(motif, sequence)
             score = val if not math.isnan(val) else pd.NA
-            print(f"           score: {score}", file=sys.stderr)
+            print(f"  [{i}/{total}] {gene} ({jid}): score = {score}", file=sys.stderr)
             scores.append(score)
 
     return pd.Series(scores, index=dbds.index, dtype=object)
