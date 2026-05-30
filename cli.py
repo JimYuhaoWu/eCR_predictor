@@ -27,6 +27,11 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Path to module_library.db (default: auto-detected)",
     )
+    parser.add_argument(
+        "--include-sequence",
+        action="store_true",
+        help="Add a sequence_aa column (DBD amino acid sequence) to the output",
+    )
     args = parser.parse_args(argv)
 
     # Validate sequence
@@ -62,7 +67,8 @@ def main(argv: list[str] | None = None) -> None:
 
     # Build and emit result table
     print("[4/4] Writing results...", file=sys.stderr)
-    result = build_result_table(candidates, motif_scores, confidence)
+    result = build_result_table(candidates, motif_scores, confidence,
+                                include_sequence=args.include_sequence)
     write_output(result, args.output)
     print("      Done.", file=sys.stderr)
 

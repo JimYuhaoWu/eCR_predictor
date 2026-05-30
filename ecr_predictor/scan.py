@@ -95,22 +95,45 @@ def _fetch_all_parallel(jaspar_ids: list) -> dict:
 def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
     """
     Return the maximum log-odds score of a motif scanned against the sequence,
-    normalized to [−1, 1] by the theoretical maximum for this motif.
+    normalized to [-1, 1] by the theoretical maximum.
+
+    If the sequence is shorter than the motif, we slide the sequence against
+    every sub-window of the PSSM of length len(seq) and take the best score.
+    This captures cases where the input overlaps the binding site core.
     """
     seq = Seq(sequence.upper())
-    if len(seq) < len(motif):
-        return float("nan")
+    n, m = len(seq), len(motif)
 
     pwm = motif.counts.normalize(pseudocounts=0.5)
     pssm = pwm.log_odds()
 
-    scores = list(np.atleast_1d(pssm.calculate(seq)))
-    if not scores:
-        return float("nan")
+    if n >= m:
+        # Standard case: slide motif over sequence
+        scores = list(np.atleast_1d(pssm.calculate(seq)))
+        if not scores:
+            return float("nan")
+        raw_max = max(scores)
+        max_possible = sum(max(pssm[nt][i] for nt in "ACGT") for i in range(m))
+    else:
+        # Partial match: slide sequence against every n-length sub-window of the PSSM
+        best_score = -math.inf
+        best_max_possible = 0.0
+        for start in range(m - n + 1):
+            # Score seq against PSSM positions [start : start+n]
+            sub_score = sum(
+                pssm[str(seq[j])][start + j] for j in range(n)
+                if str(seq[j]) in pssm
+            )
+            sub_max = sum(
+                max(pssm[nt][start + j] for nt in "ACGT") for j in range(n)
+            )
+            if sub_score > best_score:
+                best_score = sub_score
+                best_max_possible = sub_max
+        raw_max = best_score
+        max_possible = best_max_possible
 
-    raw_max = max(scores)
-    max_possible = sum(max(pssm[nt][i] for nt in "ACGT") for i in range(len(motif)))
-    if max_possible <= 0:
+    if max_possible <= 0 or math.isinf(raw_max):
         return float("nan")
 
     return raw_max / max_possible

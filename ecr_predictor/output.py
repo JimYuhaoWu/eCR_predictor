@@ -30,17 +30,22 @@ def build_result_table(
     dbds: pd.DataFrame,
     motif_scores: pd.Series,
     annotation_confidence: pd.Series,
+    include_sequence: bool = False,
 ) -> pd.DataFrame:
     df = dbds.rename(columns=_COLUMN_ALIASES).copy()
     df["motif_score"] = motif_scores.values
     df["annotation_confidence"] = annotation_confidence.values
 
+    cols = _OUTPUT_COLUMNS.copy()
+    if include_sequence:
+        cols = cols + ["sequence_aa"]
+
     # Ensure all output columns exist
-    for col in _OUTPUT_COLUMNS:
+    for col in cols:
         if col not in df.columns:
             df[col] = pd.NA
 
-    df = df[_OUTPUT_COLUMNS].copy()
+    df = df[cols].copy()
 
     # Sort: exact matches first, then by motif_score descending (NA last)
     df["_match_rank"] = (df["query_species_match"] != "exact").astype(int)
