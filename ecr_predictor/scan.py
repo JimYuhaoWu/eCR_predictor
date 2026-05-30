@@ -57,6 +57,9 @@ def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
     normalized to [−1, 1] by the theoretical maximum for this motif.
     """
     seq = Seq(sequence.upper())
+    if len(seq) < len(motif):
+        return float("nan")
+
     pwm = motif.counts.normalize(pseudocounts=0.5)
     pssm = pwm.log_odds()
 
