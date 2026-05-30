@@ -11,6 +11,7 @@ import io
 import math
 import sys
 
+import numpy as np
 import pandas as pd
 import requests
 from Bio import motifs
@@ -59,7 +60,7 @@ def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
     pwm = motif.counts.normalize(pseudocounts=0.5)
     pssm = pwm.log_odds()
 
-    scores = list(pssm.calculate(seq))
+    scores = list(np.atleast_1d(pssm.calculate(seq)))
     if not scores:
         return float("nan")
 
