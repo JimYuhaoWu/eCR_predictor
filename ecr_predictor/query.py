@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from ecr_mod_lib.scripts.schema import ModuleLibrary
+from scripts.schema import ModuleLibrary
 
 _DB_PATH = Path(__file__).parents[2] / "module_library" / "library" / "module_library.db"
 

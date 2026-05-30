@@ -7,7 +7,7 @@ name = "ecr_predictor"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "ecr_mod_lib",
+    "scripts",
     "biopython",
     "pandas",
 ]
