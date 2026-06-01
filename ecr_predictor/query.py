@@ -9,7 +9,7 @@ import pandas as pd
 
 from scripts.schema import ModuleLibrary
 
-_DB_PATH = Path(__file__).parents[2] / "module_library" / "library" / "module_library.db"
+_DB_PATH = Path(__file__).parents[2] / "eCR_mod_lib" / "library" / "module_library.db"
 
 
 def load_dbds(db_path: Path = _DB_PATH) -> pd.DataFrame:
