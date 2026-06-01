@@ -54,8 +54,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="FIMO p-value threshold for a hit to be validated (default: 1e-4).",
     )
     parser.add_argument(
-        "--top-n-af3", type=int, default=5,
-        help="Number of top FIMO-validated hits to submit to AF3 (default: 5).",
+        "--top-n-af3", type=int, default=2,
+        help="Number of top FIMO-validated hits to submit to AF3 (default: 2).",
     )
     parser.add_argument(
         "--stop-after",
