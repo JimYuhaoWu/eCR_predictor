@@ -76,6 +76,41 @@ Two columns, intentionally independent:
 - `medium` → `motif-only`
 - `low` → `predicted`
 
+## Refinement pipeline (refine.py)
+
+Runs downstream validation on `cli.py` output. Use `--include-sequence` in `cli.py` to enable AF3.
+
+```bash
+python cli.py --sequence <SEQ> --species "Homo sapiens" --output results.tsv --include-sequence
+python refine.py --input results.tsv --sequence <SEQ> [--stop-after fimo]
+```
+
+| Stage | Flag | Status | Prerequisite |
+|---|---|---|---|
+| Filter | always on | done | — |
+| FIMO | `--fimo-pvalue` | scaffolded | `conda install -c bioconda meme` |
+| AF3 | `--top-n-af3` | stub | see `ecr_predictor/af3.py` TODOs |
+| FoldX | automatic | stub | see `ecr_predictor/foldx.py` TODOs |
+
+- `--stop-after fimo` writes results and exits before AF3/FoldX.
+- AF3 stub writes job JSON to `af3_outputs/jobs/` even before submission is wired up.
+- FoldX binary: set `FOLDX_PATH` env var, or place at `~/foldx/foldx`.
+
+### Filter logic
+Drops rows where **both** are true: `annotation_confidence == 'low'` AND `motif_score < --min-motif-score` (default 0.0; NA counts as below threshold).
+
+### FIMO
+- Converts JASPAR cache → MEME format on the fly.
+- Adds `fimo_pvalue` and `fimo_validated` columns. Best (lowest) p-value per motif is reported.
+
+### AF3
+- Writes `af3_outputs/jobs/<gene_name>.json` with protein (chain A) + DNA (chain B) definitions.
+- Three invocation strategies in `ecr_predictor/af3.py`: Server API, local install, HPC.
+
+### FoldX
+- RepairPDB → AnalyseComplex on each AF3 CIF. Output: `foldx_ddg_kcal_mol` (lower = stronger binding).
+- Output parsing (`Interaction_*_AC.fxout`) marked TODO in `ecr_predictor/foldx.py`.
+
 ## Key implementation notes
 
 - DBDs with no `jaspar_id` are **not dropped** — they appear with `motif_score = NA`.
