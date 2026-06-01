@@ -197,9 +197,9 @@ def run_fimo_validation(
         )
 
     hits = hits.copy()
-    hits["fimo_pvalue"] = hits["jaspar_id"].map(best_pval)
+    hits["fimo_pvalue"] = pd.to_numeric(hits["jaspar_id"].map(best_pval), errors="coerce")
     hits["fimo_validated"] = hits["fimo_pvalue"].apply(
-        lambda p: (not pd.isna(p)) and (p <= pvalue_thresh)
+        lambda p: (not pd.isna(p)) and (float(p) <= pvalue_thresh)
     )
 
     n_validated = hits["fimo_validated"].sum()
