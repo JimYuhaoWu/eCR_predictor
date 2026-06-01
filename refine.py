@@ -4,14 +4,14 @@ ECR_predictor refinement pipeline.
 Takes the output.tsv from cli.py and runs:
   [1] Filter  — drop low-confidence hits below the motif_score threshold
   [2] FIMO    — validate remaining hits with FIMO (requires MEME Suite)
-  [3] AF3     — predict DBD–DNA complex structures for top hits (stub)
+  [3] AF3     — predict DBD–DNA complex structures for top hits
   [4] FoldX   — estimate binding affinity from AF3 structures (stub)
 
 Usage:
-    python refine.py --input results.tsv --sequence ATCG... [options]
+    python refine.py --input results.tsv --sequence ATCG... [--config config.yaml]
 
-Stages [3] and [4] raise NotImplementedError until their backends are wired up.
-Run with --stop-after fimo to only execute stages [1–2].
+AF3 backend is selected in config.yaml (local | hpcc | online).
+Run with --stop-after fimo to stop before AF3.
 """
 from __future__ import annotations
 
@@ -42,6 +42,10 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Output TSV path (default: <input stem>_refined.tsv).",
     )
     parser.add_argument(
+        "--config", default=None,
+        help="Path to config.yaml (default: config.yaml in repo root).",
+    )
+    parser.add_argument(
         "--min-motif-score", type=float, default=0.0,
         help="Drop hits with motif_score below this (default: 0.0).",
     )
@@ -57,7 +61,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--stop-after",
         choices=STAGES,
         default=None,
-        help="Stop the pipeline after this stage (inclusive). Useful before AF3/FoldX are wired up.",
+        help="Stop the pipeline after this stage (inclusive).",
     )
     parser.add_argument(
         "--af3-output-dir", default="af3_outputs",
@@ -85,6 +89,17 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     stop_after = args.stop_after
+
+    # -------------------------------------------------------------------------
+    # Load config
+    # -------------------------------------------------------------------------
+    from ecr_predictor.config import load_config, get_af3_config
+    try:
+        cfg = load_config(args.config)
+    except FileNotFoundError as e:
+        print(f"WARNING: {e}\nAF3 stage will use default hpcc settings.", file=sys.stderr)
+        cfg = {}
+    af3_cfg = get_af3_config(cfg)
 
     # -------------------------------------------------------------------------
     # Load
@@ -135,11 +150,12 @@ def main(argv: list[str] | None = None) -> None:
         df = run_af3_prediction(
             df,
             dna_sequence=sequence,
+            af3_cfg=af3_cfg,
             output_dir=Path(args.af3_output_dir),
             top_n=args.top_n_af3,
         )
     except NotImplementedError as e:
-        print(f"NOTE: AF3 not yet implemented — stopping after FIMO output.\n  {e}", file=sys.stderr)
+        print(f"NOTE: AF3 backend not implemented — stopping after FIMO output.\n  {e}", file=sys.stderr)
         _write(df, output_path)
         return
 

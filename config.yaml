@@ -1,0 +1,40 @@
+# ECR_predictor configuration
+# Pass to refine.py with: --config config.yaml
+
+af3:
+  # Which backend to use: local | hpcc | online
+  backend: hpcc
+
+  # ── Local backend ──────────────────────────────────────────────────────────
+  # AF3 is installed on the same machine running refine.py.
+  # run_alphafold3.sh must be on PATH or specified via af3_script.
+  local:
+    af3_script: run_alphafold3.sh   # path to run_alphafold3.sh
+    model_dir: /path/to/af3/models  # AF3 model weights directory
+
+  # ── HPCC backend (Slurm via SSH) ───────────────────────────────────────────
+  # Requires password-less SSH key auth to the HPCC head node.
+  # Test with: ssh <user>@<host> echo ok
+  hpcc:
+    host: hpcc.example.edu          # HPCC head node hostname or IP
+    user: wuyuhao                   # SSH username
+    remote_workdir: /scratch/wuyuhao/ecr_af3_jobs  # writable dir on HPCC
+
+    # Slurm settings (match your cluster's available partitions/QOS)
+    slurm_partition: a40-tmp
+    slurm_qos: gpu
+    slurm_nodes: 1
+    slurm_cpus: 8
+    slurm_gpus: 1
+    slurm_mem: 80G
+    slurm_module: alphafold/3_a40-tmp  # module load <this>
+
+    # How long to wait between squeue polls (seconds)
+    poll_interval: 60
+    # Give up after this many seconds (0 = wait forever)
+    timeout: 7200
+
+  # ── Online backend (AlphaFold Server) ─────────────────────────────────────
+  # Not yet implemented. Scaffold only.
+  online:
+    api_key: ""   # your AlphaFold Server API key

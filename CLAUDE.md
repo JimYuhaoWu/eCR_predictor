@@ -82,19 +82,38 @@ Runs downstream validation on `cli.py` output. Use `--include-sequence` in `cli.
 
 ```bash
 python cli.py --sequence <SEQ> --species "Homo sapiens" --output results.tsv --include-sequence
-python refine.py --input results.tsv --sequence <SEQ> [--stop-after fimo]
+python refine.py --input results.tsv --sequence <SEQ> --config config.yaml [--stop-after fimo]
 ```
 
 | Stage | Flag | Status | Prerequisite |
 |---|---|---|---|
 | Filter | always on | done | — |
-| FIMO | `--fimo-pvalue` | scaffolded | `conda install -c bioconda meme` |
-| AF3 | `--top-n-af3` | stub | see `ecr_predictor/af3.py` TODOs |
+| FIMO | `--fimo-pvalue` | done | MEME Suite on PATH |
+| AF3 | `--top-n-af3` | done | configure `config.yaml` |
 | FoldX | automatic | stub | see `ecr_predictor/foldx.py` TODOs |
 
-- `--stop-after fimo` writes results and exits before AF3/FoldX.
-- AF3 stub writes job JSON to `af3_outputs/jobs/` even before submission is wired up.
-- FoldX binary: set `FOLDX_PATH` env var, or place at `~/foldx/foldx`.
+### config.yaml
+Copy `config.yaml` from the repo root and edit before running AF3.
+```yaml
+af3:
+  backend: hpcc   # local | hpcc | online
+  hpcc:
+    host: hpcc.example.edu
+    user: wuyuhao
+    remote_workdir: /scratch/wuyuhao/ecr_af3_jobs
+    slurm_partition: a40-tmp
+    slurm_qos: gpu
+    slurm_module: alphafold/3_a40-tmp
+    ...
+```
+
+### AF3 backends
+- **local** — calls `run_alphafold3.sh input_dir output_dir json_file` via subprocess
+- **hpcc** — scp JSON → SSH sbatch → poll squeue → scp CIF back. Requires key-based SSH auth (`ssh user@host echo ok`)
+- **online** — scaffold only (not implemented)
+
+AF3 JSON format: protein chain A + single-stranded DNA chain B. Job name = gene name. 5 model seeds.
+Output CIF stored in `af3_outputs/<gene_name>/`. `af3_cif_path` column added to TSV.
 
 ### Filter logic
 Drops rows where **both** are true: `annotation_confidence == 'low'` AND `motif_score < --min-motif-score` (default 0.0; NA counts as below threshold).
@@ -102,10 +121,6 @@ Drops rows where **both** are true: `annotation_confidence == 'low'` AND `motif_
 ### FIMO
 - Converts JASPAR cache → MEME format on the fly.
 - Adds `fimo_pvalue` and `fimo_validated` columns. Best (lowest) p-value per motif is reported.
-
-### AF3
-- Writes `af3_outputs/jobs/<gene_name>.json` with protein (chain A) + DNA (chain B) definitions.
-- Three invocation strategies in `ecr_predictor/af3.py`: Server API, local install, HPC.
 
 ### FoldX
 - RepairPDB → AnalyseComplex on each AF3 CIF. Output: `foldx_ddg_kcal_mol` (lower = stronger binding).
