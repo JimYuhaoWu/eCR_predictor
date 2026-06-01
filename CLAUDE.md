@@ -1,5 +1,14 @@
 # CLAUDE.md — ECR_predictor
 
+## Coding principles
+
+- **No features beyond what was asked.** No speculative abstractions, configurability, or error handling for impossible scenarios.
+- **Surgical changes.** Touch only what the task requires. Don't improve adjacent code, comments, or formatting. Match existing style.
+- **Surface tradeoffs before coding.** If multiple interpretations exist, present them — don't pick silently. If something is unclear, ask.
+- **If you notice unrelated dead code or issues, mention them — don't silently fix them.**
+- **Stubs are stubs.** `af3.py` and `foldx.py` are intentional placeholders — don't flesh them out unless explicitly asked.
+- **Scores are intentionally independent.** `motif_score` and `annotation_confidence` must never be merged into a single composite score without explicit instruction.
+
 ## What this project does
 
 CLI tool that predicts which DNA-Binding Domains (DBDs) from the `eCR_mod_lib` library are likely to bind a given DNA sequence and species. Returns a ranked TSV with two independent confidence scores.
@@ -13,9 +22,15 @@ ECR_predictor/
 │   ├── scan.py       # JASPAR PWM scoring via BioPython
 │   ├── score.py      # validation_level → annotation_confidence label
 │   ├── output.py     # build result table, write TSV
-│   └── prefetch.py   # pre-download JASPAR motifs to jaspar_cache/
+│   ├── prefetch.py   # pre-download JASPAR motifs to jaspar_cache/
+│   ├── filter.py     # drop low-confidence hits (annotation + motif_score)
+│   ├── fimo.py       # FIMO motif validation (requires MEME Suite)
+│   ├── af3.py        # AlphaFold 3 structure prediction (stub — see TODOs)
+│   └── foldx.py      # FoldX binding affinity estimation (stub — see TODOs)
 ├── jaspar_cache/     # .jaspar files stored here after prefetch (gitignored)
-├── cli.py            # argparse entry point
+├── af3_outputs/      # AF3 JSON inputs + structure outputs (created by refine.py)
+├── cli.py            # prediction entrypoint
+├── refine.py         # refinement entrypoint (filter → FIMO → AF3 → FoldX)
 ├── server_setup.sh   # one-time server setup (install + seed DB + prefetch motifs)
 └── server_run.sh     # run a prediction on the server
 ```
