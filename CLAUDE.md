@@ -93,7 +93,10 @@ python refine.py --input results.tsv --sequence <SEQ> --config config.yaml [--st
 | FoldX | automatic | stub | see `ecr_predictor/foldx.py` TODOs |
 
 ### config.yaml
-Copy `config.yaml` from the repo root and edit before running AF3.
+`config.yaml` is gitignored (contains passwords/hosts). Copy from the template and edit:
+```bash
+cp config.example.yaml config.yaml
+```
 ```yaml
 af3:
   backend: hpcc   # local | hpcc | online

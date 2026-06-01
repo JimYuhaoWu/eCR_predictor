@@ -1,10 +1,10 @@
-__pycache__/
-*.py[cod]
-*.egg-info/
-.eggs/
-dist/
-build/
 *.db
+*.egg-info/
+*.py[cod]
+.eggs/
 .env
-jaspar_cache/
+__pycache__/
+build/
 config.yaml
+dist/
+jaspar_cache/
