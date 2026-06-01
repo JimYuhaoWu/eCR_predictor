@@ -6,11 +6,12 @@ af3:
   backend: hpcc
 
   # ── Local backend ──────────────────────────────────────────────────────────
-  # AF3 is installed on the same machine running refine.py.
-  # run_alphafold3.sh must be on PATH or specified via af3_script.
+  # Use this when running refine.py directly on the HPCC (or any machine
+  # where AF3 is installed). Set backend: local in config.yaml, then run
+  # refine.py interactively on the HPCC.
   local:
-    af3_script: run_alphafold3.sh   # path to run_alphafold3.sh
-    model_dir: /path/to/af3/models  # AF3 model weights directory
+    af3_script: run_alphafold3.sh   # name or full path to run_alphafold3.sh
+    module_load: alphafold/3_a40-tmp  # module to load before running (leave blank if not needed)
 
   # ── HPCC backend (Slurm via SSH) ───────────────────────────────────────────
   # Authentication: password is read from the ECR_HPCC_PASSWORD environment

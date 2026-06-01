@@ -118,21 +118,38 @@ def _run_local(
     """
     Run AF3 locally via run_alphafold3.sh for each job.
 
+    If af3.local.module_load is set, the command is wrapped in:
+      bash -c "source /etc/profile.d/modules.sh && module load <X> && run_alphafold3.sh ..."
+    This handles environments (e.g. HPCC interactive sessions) where
+    'module' is a shell function not available to plain subprocess calls.
+
     Returns {job_name: cif_path | None}
     """
-    af3_script = af3_cfg.get("local", {}).get("af3_script", "run_alphafold3.sh")
+    local_cfg = af3_cfg.get("local", {})
+    af3_script = local_cfg.get("af3_script", "run_alphafold3.sh")
+    module_load = local_cfg.get("module_load", "").strip()
     results: dict[str, Path | None] = {}
 
     for job_name, json_path in jobs:
         job_out = output_dir / job_name
         job_out.mkdir(parents=True, exist_ok=True)
 
-        cmd = [
-            af3_script,
-            str(json_path.parent),   # input_dir
-            str(job_out),            # output_dir
-            json_path.name,          # json filename
-        ]
+        af3_call = (
+            f'{af3_script} "{json_path.parent}" "{job_out}" "{json_path.name}"'
+        )
+        if module_load:
+            # Source the module system then load the module before calling AF3.
+            # /etc/profile.d/modules.sh is the standard location on most HPC systems;
+            # adjust if your cluster uses a different path.
+            bash_cmd = (
+                f'source /etc/profile.d/modules.sh 2>/dev/null || true && '
+                f'module load {module_load} && '
+                f'{af3_call}'
+            )
+            cmd = ["bash", "-c", bash_cmd]
+        else:
+            cmd = ["bash", "-c", af3_call]
+
         print(f"  [local] Running AF3 for {job_name}...", file=sys.stderr)
         result = subprocess.run(cmd, capture_output=False, text=True)
         if result.returncode != 0:
