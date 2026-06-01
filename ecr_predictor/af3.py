@@ -58,7 +58,7 @@ def _build_af3_json(job_name: str, protein_sequence: str, dna_sequence: str) -> 
                 }
             },
         ],
-        "modelSeeds": [1, 2, 3, 4, 5],
+        "modelSeeds": [1],
         "dialect": "alphafold3",
         "version": 1,
     }
