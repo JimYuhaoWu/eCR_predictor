@@ -2,25 +2,29 @@
 AlphaFold 3 structure prediction — three backends.
 
   local  — run run_alphafold3.sh directly on the current machine
-  hpcc   — scp input JSON to HPCC, sbatch via SSH, poll, scp output back
+  hpcc   — upload input JSON to HPCC via SFTP, sbatch via SSH, poll, download CIF
   online — AlphaFold Server REST API (scaffold only, not implemented)
 
 Select backend in config.yaml:  af3.backend: local | hpcc | online
 
+SSH auth (hpcc backend): password-based via paramiko.
+  Password is read from the ECR_HPCC_PASSWORD environment variable first,
+  then falls back to af3.hpcc.ssh_password in config.yaml.
+  Set it with: export ECR_HPCC_PASSWORD='yourpassword'
+
 JSON format follows the AF3 input spec:
   https://github.com/google-deepmind/alphafold3#input-format
-
-SSH auth: the hpcc backend requires password-less key-based SSH to the
-HPCC head node. Test with: ssh <user>@<host> echo ok
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator
 
 import pandas as pd
 
@@ -143,7 +147,7 @@ def _run_local(
 
 
 # ---------------------------------------------------------------------------
-# HPCC backend (SSH + Slurm)
+# HPCC backend (paramiko SSH + SFTP + Slurm)
 # ---------------------------------------------------------------------------
 
 _SLURM_TEMPLATE = """\
@@ -166,51 +170,104 @@ run_alphafold3.sh "$input_dir" "$output_dir" "{json_filename}"
 """
 
 
-def _ssh(host: str, user: str, cmd: str) -> subprocess.CompletedProcess:
-    """Run a command on the HPCC head node via SSH."""
-    return subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-         f"{user}@{host}", cmd],
-        capture_output=True, text=True,
+def _get_password(hpcc: dict[str, Any]) -> str:
+    """
+    Resolve the SSH password.
+    Priority: ECR_HPCC_PASSWORD env var → config ssh_password field.
+    """
+    pw = os.environ.get("ECR_HPCC_PASSWORD", "")
+    if pw:
+        return pw
+    pw = hpcc.get("ssh_password", "")
+    if pw:
+        return pw
+    raise ValueError(
+        "HPCC password not found. Set the ECR_HPCC_PASSWORD environment variable:\n"
+        "  export ECR_HPCC_PASSWORD='yourpassword'\n"
+        "Or set af3.hpcc.ssh_password in config.yaml."
     )
 
 
-def _scp_to(host: str, user: str, local: Path, remote: str) -> None:
-    subprocess.run(
-        ["scp", str(local), f"{user}@{host}:{remote}"],
-        check=True, capture_output=True,
-    )
+@contextmanager
+def _ssh_client(hpcc: dict[str, Any]) -> Generator:
+    """
+    Open a paramiko SSHClient connection to the HPCC and yield it.
+    Closes the connection on exit.
+    """
+    try:
+        import paramiko
+    except ImportError:
+        raise ImportError("paramiko is required: pip install paramiko")
+
+    host = hpcc["host"]
+    user = hpcc["user"]
+    port = int(hpcc.get("port", 22))
+    password = _get_password(hpcc)
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(host, port=port, username=user, password=password, timeout=15)
+    try:
+        yield client
+    finally:
+        client.close()
 
 
-def _scp_from(host: str, user: str, remote: str, local: Path) -> None:
+def _run_cmd(client, cmd: str) -> tuple[str, str, int]:
+    """Run a command over an open paramiko SSHClient. Returns (stdout, stderr, exit_code)."""
+    _, stdout, stderr = client.exec_command(cmd)
+    exit_code = stdout.channel.recv_exit_status()
+    return stdout.read().decode(), stderr.read().decode(), exit_code
+
+
+def _sftp_put(client, local: Path, remote: str) -> None:
+    """Upload a single file via SFTP."""
+    with client.open_sftp() as sftp:
+        sftp.put(str(local), remote)
+
+
+def _sftp_get_dir(client, remote: str, local: Path) -> None:
+    """
+    Recursively download a remote directory via SFTP.
+    Creates local directory structure as needed.
+    """
     local.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["scp", "-r", f"{user}@{host}:{remote}", str(local)],
-        check=True, capture_output=True,
-    )
+    with client.open_sftp() as sftp:
+        _sftp_get_recursive(sftp, remote, local)
+
+
+def _sftp_get_recursive(sftp, remote: str, local: Path) -> None:
+    import stat as stat_module
+    for entry in sftp.listdir_attr(remote):
+        remote_path = f"{remote}/{entry.filename}"
+        local_path = local / entry.filename
+        if stat_module.S_ISDIR(entry.st_mode):
+            local_path.mkdir(exist_ok=True)
+            _sftp_get_recursive(sftp, remote_path, local_path)
+        else:
+            sftp.get(remote_path, str(local_path))
 
 
 def _submit_slurm_job(
     job_name: str,
     json_path: Path,
     hpcc: dict[str, Any],
+    client,
 ) -> str | None:
     """
-    Copy JSON + slurm script to HPCC, submit with sbatch.
+    Upload JSON + slurm script to HPCC, submit with sbatch.
     Returns the Slurm job ID string, or None on failure.
     """
-    host = hpcc["host"]
-    user = hpcc["user"]
     remote_workdir = hpcc["remote_workdir"]
 
     # Ensure remote workdir exists
-    _ssh(host, user, f"mkdir -p {remote_workdir}")
+    _run_cmd(client, f"mkdir -p {remote_workdir}")
 
-    # Copy JSON input
-    _scp_to(host, user, json_path, f"{remote_workdir}/{json_path.name}")
+    # Upload JSON
+    _sftp_put(client, json_path, f"{remote_workdir}/{json_path.name}")
 
-    # Write slurm script locally, then scp it
-    slurm_script_content = _SLURM_TEMPLATE.format(
+    # Write and upload slurm script
+    slurm_content = _SLURM_TEMPLATE.format(
         nodes=hpcc.get("slurm_nodes", 1),
         cpus=hpcc.get("slurm_cpus", 8),
         gpus=hpcc.get("slurm_gpus", 1),
@@ -223,22 +280,22 @@ def _submit_slurm_job(
         json_filename=json_path.name,
     )
     slurm_local = json_path.parent / f"{job_name}.slurm"
-    slurm_local.write_text(slurm_script_content, encoding="utf-8")
-    _scp_to(host, user, slurm_local, f"{remote_workdir}/{slurm_local.name}")
+    slurm_local.write_text(slurm_content, encoding="utf-8")
+    _sftp_put(client, slurm_local, f"{remote_workdir}/{slurm_local.name}")
 
     # Submit
-    result = _ssh(host, user, f"cd {remote_workdir} && sbatch {slurm_local.name}")
-    if result.returncode != 0:
-        print(f"  WARNING: sbatch failed for {job_name}:\n{result.stderr}", file=sys.stderr)
+    stdout, stderr, rc = _run_cmd(client, f"cd {remote_workdir} && sbatch {slurm_local.name}")
+    if rc != 0:
+        print(f"  WARNING: sbatch failed for {job_name}:\n{stderr}", file=sys.stderr)
         return None
 
     # Parse job ID from "Submitted batch job 12345"
-    for token in result.stdout.split():
+    for token in stdout.split():
         if token.isdigit():
             print(f"  Submitted {job_name} → Slurm job {token}", file=sys.stderr)
             return token
 
-    print(f"  WARNING: could not parse job ID from: {result.stdout!r}", file=sys.stderr)
+    print(f"  WARNING: could not parse job ID from: {stdout!r}", file=sys.stderr)
     return None
 
 
@@ -246,26 +303,24 @@ def _poll_slurm_job(
     job_id: str,
     job_name: str,
     hpcc: dict[str, Any],
+    client,
 ) -> bool:
     """
-    Poll squeue until the job is no longer listed (finished or failed).
-    Returns True if job completed (exit state CD), False on timeout or failure.
+    Poll squeue until the job is no longer listed, then check sacct.
+    Returns True if COMPLETED, False on timeout or failure.
     """
-    host = hpcc["host"]
-    user = hpcc["user"]
     poll_interval = int(hpcc.get("poll_interval", 60))
     timeout = int(hpcc.get("timeout", 7200))
     elapsed = 0
 
     print(f"  Polling job {job_id} every {poll_interval}s (timeout {timeout}s)...", file=sys.stderr)
     while True:
-        result = _ssh(host, user, f"squeue -j {job_id} -h -o '%T' 2>/dev/null")
-        state = result.stdout.strip()
+        stdout, _, _ = _run_cmd(client, f"squeue -j {job_id} -h -o '%T' 2>/dev/null")
+        state = stdout.strip()
 
         if not state:
-            # Job no longer in queue — check sacct for exit status
-            sacct = _ssh(host, user, f"sacct -j {job_id} -n -o State -X 2>/dev/null")
-            final = sacct.stdout.strip().split("\n")[0].strip() if sacct.stdout.strip() else "UNKNOWN"
+            sacct_out, _, _ = _run_cmd(client, f"sacct -j {job_id} -n -o State -X 2>/dev/null")
+            final = sacct_out.strip().split("\n")[0].strip() if sacct_out.strip() else "UNKNOWN"
             if "COMPLETED" in final:
                 print(f"  Job {job_id} ({job_name}) COMPLETED.", file=sys.stderr)
                 return True
@@ -289,51 +344,50 @@ def _run_hpcc(
     af3_cfg: dict[str, Any],
 ) -> dict[str, Path | None]:
     """
-    Submit all jobs to HPCC, poll for completion, retrieve outputs.
+    Submit all jobs to HPCC via paramiko, poll for completion, retrieve outputs.
     Returns {job_name: best_cif_path | None}
     """
     hpcc = af3_cfg.get("hpcc", {})
-    host = hpcc.get("host", "")
-    user = hpcc.get("user", "")
-    remote_workdir = hpcc.get("remote_workdir", "")
-
-    if not host or not user or not remote_workdir:
+    if not hpcc.get("host") or not hpcc.get("user") or not hpcc.get("remote_workdir"):
         raise ValueError(
             "af3.hpcc.host, .user, and .remote_workdir must be set in config.yaml"
         )
 
-    # Submit all jobs first
-    job_ids: dict[str, str] = {}
-    for job_name, json_path in jobs:
-        jid = _submit_slurm_job(job_name, json_path, hpcc)
-        if jid:
-            job_ids[job_name] = jid
-
-    # Poll all jobs to completion
-    completed: set[str] = set()
-    for job_name, jid in job_ids.items():
-        ok = _poll_slurm_job(jid, job_name, hpcc)
-        if ok:
-            completed.add(job_name)
-
-    # Retrieve outputs
+    remote_workdir = hpcc["remote_workdir"]
     results: dict[str, Path | None] = {}
-    for job_name, _ in jobs:
-        if job_name not in completed:
-            results[job_name] = None
-            continue
 
-        local_out = output_dir / job_name
-        remote_out = f"{remote_workdir}/{job_name}"
-        try:
-            _scp_from(host, user, remote_out, local_out)
-        except subprocess.CalledProcessError as e:
-            print(f"  WARNING: scp failed for {job_name}: {e}", file=sys.stderr)
-            results[job_name] = None
-            continue
+    with _ssh_client(hpcc) as client:
+        # Submit all jobs
+        job_ids: dict[str, str] = {}
+        for job_name, json_path in jobs:
+            jid = _submit_slurm_job(job_name, json_path, hpcc, client)
+            if jid:
+                job_ids[job_name] = jid
 
-        cif = _find_best_cif(local_out / job_name)
-        results[job_name] = cif
+        # Poll all jobs to completion
+        completed: set[str] = set()
+        for job_name, jid in job_ids.items():
+            ok = _poll_slurm_job(jid, job_name, hpcc, client)
+            if ok:
+                completed.add(job_name)
+
+        # Retrieve outputs
+        for job_name, _ in jobs:
+            if job_name not in completed:
+                results[job_name] = None
+                continue
+
+            local_out = output_dir / job_name
+            remote_out = f"{remote_workdir}/{job_name}"
+            try:
+                _sftp_get_dir(client, remote_out, local_out)
+            except Exception as e:
+                print(f"  WARNING: SFTP download failed for {job_name}: {e}", file=sys.stderr)
+                results[job_name] = None
+                continue
+
+            cif = _find_best_cif(local_out / job_name)
+            results[job_name] = cif
 
     return results
 

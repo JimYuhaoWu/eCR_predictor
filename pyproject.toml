@@ -10,6 +10,8 @@ dependencies = [
     "scripts",
     "biopython",
     "pandas",
+    "paramiko",
+    "pyyaml",
 ]
 
 [tool.setuptools.packages.find]

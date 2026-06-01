@@ -7,3 +7,4 @@ build/
 *.db
 .env
 jaspar_cache/
+config.yaml

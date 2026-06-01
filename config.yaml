@@ -13,11 +13,15 @@ af3:
     model_dir: /path/to/af3/models  # AF3 model weights directory
 
   # ── HPCC backend (Slurm via SSH) ───────────────────────────────────────────
-  # Requires password-less SSH key auth to the HPCC head node.
-  # Test with: ssh <user>@<host> echo ok
+  # Authentication: password is read from the ECR_HPCC_PASSWORD environment
+  # variable. Set it with: export ECR_HPCC_PASSWORD='yourpassword'
+  # Alternatively, set ssh_password here — but avoid committing this file
+  # to git with a real password in it (config.yaml is gitignored).
   hpcc:
     host: hpcc.example.edu          # HPCC head node hostname or IP
+    port: 22                        # SSH port (use 10004 if needed)
     user: wuyuhao                   # SSH username
+    ssh_password: ""                # fallback if ECR_HPCC_PASSWORD not set
     remote_workdir: /scratch/wuyuhao/ecr_af3_jobs  # writable dir on HPCC
 
     # Slurm settings (match your cluster's available partitions/QOS)
