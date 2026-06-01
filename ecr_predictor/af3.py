@@ -355,13 +355,54 @@ def _poll_slurm_job(
         elapsed += poll_interval
 
 
+# ---------------------------------------------------------------------------
+# Run log — persists job state across interruptions
+# ---------------------------------------------------------------------------
+
+def _log_path(job_dir: Path) -> Path:
+    return job_dir / "run_log.json"
+
+
+def _load_log(job_dir: Path) -> dict[str, Any]:
+    path = _log_path(job_dir)
+    if path.exists():
+        return json.loads(path.read_text(encoding="utf-8"))
+    return {}
+
+
+def _save_log(job_dir: Path, log: dict[str, Any]) -> None:
+    _log_path(job_dir).write_text(
+        json.dumps(log, indent=2), encoding="utf-8"
+    )
+
+
+def _update_log(job_dir: Path, job_name: str, **fields) -> dict[str, Any]:
+    """Update a single job's entry in the log and persist it."""
+    log = _load_log(job_dir)
+    entry = log.setdefault(job_name, {})
+    entry.update(fields)
+    _save_log(job_dir, log)
+    return log
+
+
+# ---------------------------------------------------------------------------
+# HPCC orchestration with resume support
+# ---------------------------------------------------------------------------
+
 def _run_hpcc(
     jobs: list[tuple[str, Path]],
     output_dir: Path,
     af3_cfg: dict[str, Any],
 ) -> dict[str, Path | None]:
     """
-    Submit all jobs to HPCC via paramiko, poll for completion, retrieve outputs.
+    Submit jobs to HPCC via paramiko, poll for completion, retrieve outputs.
+
+    Persists state to af3_outputs/jobs/run_log.json after every transition.
+    On re-run:
+      - already completed + CIF downloaded → returned immediately (no SSH)
+      - job_id known but not yet complete   → re-polls (no re-submit)
+      - no entry or failed/cancelled        → re-submits from scratch
+
     Returns {job_name: best_cif_path | None}
     """
     hpcc = af3_cfg.get("hpcc", {})
@@ -371,31 +412,68 @@ def _run_hpcc(
         )
 
     remote_workdir = hpcc["remote_workdir"]
+    job_dir = jobs[0][1].parent  # af3_outputs/jobs/
     results: dict[str, Path | None] = {}
 
+    # --- Fast path: return any already-downloaded CIFs without opening SSH ---
+    pending_jobs = []
+    for job_name, json_path in jobs:
+        log = _load_log(job_dir)
+        entry = log.get(job_name, {})
+        if entry.get("status") == "completed" and entry.get("local_cif"):
+            cif = Path(entry["local_cif"])
+            if cif.exists():
+                print(f"  {job_name}: already downloaded ({cif}), skipping.", file=sys.stderr)
+                results[job_name] = cif
+                continue
+        pending_jobs.append((job_name, json_path))
+
+    if not pending_jobs:
+        return results
+
+    # --- Open one SSH connection for all remaining work ---
     with _ssh_client(hpcc) as client:
-        # Submit all jobs
+
+        # Submit or re-use existing job IDs
         job_ids: dict[str, str] = {}
-        for job_name, json_path in jobs:
-            jid = _submit_slurm_job(job_name, json_path, hpcc, client)
-            if jid:
-                job_ids[job_name] = jid
+        for job_name, json_path in pending_jobs:
+            log = _load_log(job_dir)
+            entry = log.get(job_name, {})
+            existing_jid = entry.get("job_id")
+            existing_status = entry.get("status", "")
 
-        # Poll all jobs to completion
-        completed: set[str] = set()
+            if existing_jid and existing_status in ("submitted", "running"):
+                # Connection was interrupted mid-poll — re-attach to the job
+                print(f"  {job_name}: resuming poll for existing job {existing_jid}.", file=sys.stderr)
+                job_ids[job_name] = existing_jid
+            elif existing_status in ("failed", "cancelled", ""):
+                # Submit fresh
+                jid = _submit_slurm_job(job_name, json_path, hpcc, client)
+                if jid:
+                    job_ids[job_name] = jid
+                    _update_log(job_dir, job_name,
+                                job_id=jid, status="submitted",
+                                remote_workdir=remote_workdir,
+                                submitted_at=_now())
+                else:
+                    _update_log(job_dir, job_name, status="failed")
+                    results[job_name] = None
+            # status == "completed" without a local CIF: fall through to poll
+            elif existing_jid:
+                job_ids[job_name] = existing_jid
+
+        # Poll each job to completion
         for job_name, jid in job_ids.items():
+            _update_log(job_dir, job_name, status="running")
             ok = _poll_slurm_job(jid, job_name, hpcc, client)
-            if ok:
-                completed.add(job_name)
+            final_status = "completed" if ok else "failed"
+            _update_log(job_dir, job_name, status=final_status)
 
-        # Retrieve outputs
-        for job_name, _ in jobs:
-            if job_name not in completed:
+            if not ok:
                 results[job_name] = None
                 continue
 
-            # AF3 lowercases the job name when creating the output directory,
-            # e.g. job "FLI1" → remote dir "fli1/" → "fli1/fli1_model.cif"
+            # Download output
             job_name_lower = job_name.lower()
             local_out = output_dir / job_name_lower
             remote_out = f"{remote_workdir}/{job_name_lower}"
@@ -403,13 +481,22 @@ def _run_hpcc(
                 _sftp_get_dir(client, remote_out, local_out)
             except Exception as e:
                 print(f"  WARNING: SFTP download failed for {job_name}: {e}", file=sys.stderr)
+                _update_log(job_dir, job_name, status="download_failed")
                 results[job_name] = None
                 continue
 
             cif = _find_best_cif(local_out)
+            _update_log(job_dir, job_name,
+                        local_cif=str(cif) if cif else None)
             results[job_name] = cif
 
     return results
+
+
+def _now() -> str:
+    """Return current UTC time as ISO string."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------------------
