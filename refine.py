@@ -74,8 +74,8 @@ def main(argv: list[str] | None = None) -> None:
         print(f"ERROR: input file not found: {input_path}", file=sys.stderr)
         sys.exit(1)
 
-    output_path = Path(args.output) if args.output else input_path.with_stem(
-        input_path.stem + "_refined"
+    output_path = Path(args.output) if args.output else input_path.with_name(
+        input_path.stem + "_refined" + input_path.suffix
     )
 
     sequence = args.sequence.upper().strip()
