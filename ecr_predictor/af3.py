@@ -175,7 +175,7 @@ _SLURM_TEMPLATE = """\
 #SBATCH --gres=gpu:{gpus}
 #SBATCH -p {partition}
 #SBATCH -q {qos}
-#SBATCH -o af3_{job_name}_%J.log
+#SBATCH -o {remote_workdir}/af3_{job_name}_%J.log
 #SBATCH --mem={mem}
 
 module load {module}
@@ -394,8 +394,11 @@ def _run_hpcc(
                 results[job_name] = None
                 continue
 
-            local_out = output_dir / job_name
-            remote_out = f"{remote_workdir}/{job_name}"
+            # AF3 lowercases the job name when creating the output directory,
+            # e.g. job "FLI1" → remote dir "fli1/" → "fli1/fli1_model.cif"
+            job_name_lower = job_name.lower()
+            local_out = output_dir / job_name_lower
+            remote_out = f"{remote_workdir}/{job_name_lower}"
             try:
                 _sftp_get_dir(client, remote_out, local_out)
             except Exception as e:
@@ -403,25 +406,178 @@ def _run_hpcc(
                 results[job_name] = None
                 continue
 
-            cif = _find_best_cif(local_out / job_name)
+            cif = _find_best_cif(local_out)
             results[job_name] = cif
 
     return results
 
 
 # ---------------------------------------------------------------------------
-# Online backend (stub)
+# Online backend — Chai-1 API (https://chaidiscovery.com)
 # ---------------------------------------------------------------------------
+#
+# Chai-1 is an AF3-class model that supports protein–DNA complexes.
+# Sign up at https://chaidiscovery.com to get an API key, then set:
+#
+#   export ECR_CHAI_API_KEY='your_key'
+#   # or set af3.online.api_key in config.yaml
+#
+# API reference: https://chaidiscovery.com/docs/api
+# ---------------------------------------------------------------------------
+
+_CHAI_API_BASE = "https://api.chaidiscovery.com/v1"
+_CHAI_POLL_INTERVAL = 30   # seconds between status polls
+_CHAI_TIMEOUT = 3600       # max wait per job (seconds)
+
+
+def _chai_api_key(online_cfg: dict[str, Any]) -> str:
+    key = os.environ.get("ECR_CHAI_API_KEY", "")
+    if key:
+        return key
+    key = online_cfg.get("api_key", "")
+    if key:
+        return key
+    raise ValueError(
+        "Chai-1 API key not found.\n"
+        "Sign up at https://chaidiscovery.com, then:\n"
+        "  export ECR_CHAI_API_KEY='your_key'\n"
+        "Or set af3.online.api_key in config.yaml."
+    )
+
+
+def _chai_fasta(job_name: str, protein_sequence: str, dna_sequence: str) -> str:
+    """
+    Build a FASTA string for Chai-1: protein chain A + DNA chain B.
+    Chai-1 uses sequence type tags in the FASTA header.
+    """
+    return (
+        f">protein|name={job_name}_A\n{protein_sequence}\n"
+        f">dna|name={job_name}_B\n{dna_sequence}\n"
+    )
+
+
+def _chai_submit(fasta: str, api_key: str) -> str | None:
+    """Submit a prediction to the Chai-1 API. Returns job_id or None."""
+    import requests
+    resp = requests.post(
+        f"{_CHAI_API_BASE}/predictions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"fasta": fasta, "use_msa_server": True},
+        timeout=30,
+    )
+    if resp.status_code not in (200, 201, 202):
+        print(f"  WARNING: Chai-1 submit failed ({resp.status_code}): {resp.text}", file=sys.stderr)
+        return None
+    return resp.json().get("id") or resp.json().get("job_id")
+
+
+def _chai_poll(job_id: str, api_key: str) -> str | None:
+    """
+    Poll until the Chai-1 job finishes.
+    Returns the CIF download URL, or None on failure/timeout.
+    """
+    import requests
+    elapsed = 0
+    while True:
+        resp = requests.get(
+            f"{_CHAI_API_BASE}/predictions/{job_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            print(f"  WARNING: Chai-1 poll error ({resp.status_code}): {resp.text}", file=sys.stderr)
+            return None
+
+        data = resp.json()
+        status = data.get("status", "unknown")
+        print(f"  Chai-1 job {job_id}: {status} ({elapsed}s)", file=sys.stderr)
+
+        if status in ("completed", "success"):
+            # The CIF URL may be nested; try common key names
+            return (
+                data.get("cif_url")
+                or data.get("result", {}).get("cif_url")
+                or data.get("download_url")
+            )
+        if status in ("failed", "error", "cancelled"):
+            print(f"  Chai-1 job {job_id} ended with status: {status}", file=sys.stderr)
+            return None
+
+        if elapsed >= _CHAI_TIMEOUT:
+            print(f"  Chai-1 job {job_id} timed out after {elapsed}s.", file=sys.stderr)
+            return None
+
+        time.sleep(_CHAI_POLL_INTERVAL)
+        elapsed += _CHAI_POLL_INTERVAL
+
+
+def _chai_download(cif_url: str, dest: Path, api_key: str) -> Path | None:
+    """Download the CIF file from Chai-1 to dest."""
+    import requests
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    resp = requests.get(
+        cif_url,
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=60,
+    )
+    if resp.status_code != 200:
+        print(f"  WARNING: CIF download failed ({resp.status_code})", file=sys.stderr)
+        return None
+    dest.write_bytes(resp.content)
+    return dest
+
 
 def _run_online(
     jobs: list[tuple[str, Path]],
     output_dir: Path,
     af3_cfg: dict[str, Any],
 ) -> dict[str, Path | None]:
-    raise NotImplementedError(
-        "AlphaFold Server online backend is not yet implemented.\n"
-        "Use backend: local or backend: hpcc in config.yaml."
-    )
+    """
+    Submit protein–DNA structure predictions to the Chai-1 API.
+
+    Requires an API key from https://chaidiscovery.com.
+    Set ECR_CHAI_API_KEY env var or af3.online.api_key in config.yaml.
+    """
+    online_cfg = af3_cfg.get("online", {})
+    api_key = _chai_api_key(online_cfg)
+    results: dict[str, Path | None] = {}
+
+    for job_name, json_path in jobs:
+        # Read protein/DNA sequences back from the already-written JSON
+        job_input = json.loads(json_path.read_text(encoding="utf-8"))
+        seqs = job_input.get("sequences", [])
+        protein_seq = next(
+            (s["protein"]["sequence"] for s in seqs if "protein" in s), None
+        )
+        dna_seq = next(
+            (s["dna"]["sequence"] for s in seqs if "dna" in s), None
+        )
+        if not protein_seq or not dna_seq:
+            print(f"  SKIP {job_name}: could not extract sequences from JSON.", file=sys.stderr)
+            results[job_name] = None
+            continue
+
+        fasta = _chai_fasta(job_name, protein_seq, dna_seq)
+
+        print(f"  [online] Submitting {job_name} to Chai-1...", file=sys.stderr)
+        job_id = _chai_submit(fasta, api_key)
+        if not job_id:
+            results[job_name] = None
+            continue
+        print(f"  Chai-1 job ID: {job_id}", file=sys.stderr)
+
+        cif_url = _chai_poll(job_id, api_key)
+        if not cif_url:
+            results[job_name] = None
+            continue
+
+        cif_path = output_dir / job_name / f"{job_name}_chai.cif"
+        downloaded = _chai_download(cif_url, cif_path, api_key)
+        results[job_name] = downloaded
+        if downloaded:
+            print(f"  Saved: {downloaded}", file=sys.stderr)
+
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -430,21 +586,19 @@ def _run_online(
 
 def _find_best_cif(job_output_dir: Path) -> Path | None:
     """
-    Return the best-ranked CIF from an AF3 output directory.
+    Return the best CIF from an AF3 output directory.
 
-    AF3 names models like <job_name>_model.cif (single) or
-    model_<seed>_<rank>.cif. We prefer a file named *_model.cif
-    (the top-ranked output), falling back to any .cif file.
+    AF3 lowercases the job name, so for job "FLI1" the output is:
+      fli1/fli1_model.cif
+    We prefer *_model.cif; fall back to any .cif if not found.
     """
     if not job_output_dir.exists():
         return None
 
-    # Prefer *_model.cif (AF3's top-ranked output naming)
     top = list(job_output_dir.glob("*_model.cif"))
     if top:
-        return top[0]
+        return sorted(top)[0]
 
-    # Fallback: any cif, sorted for determinism
     all_cifs = sorted(job_output_dir.glob("*.cif"))
     return all_cifs[0] if all_cifs else None
 
@@ -511,7 +665,7 @@ def run_af3_prediction(
 
     hits = hits.copy()
     hits["af3_cif_path"] = hits["gene_name"].apply(
-        lambda g: str(results[g.replace(" ", "_")]) if g.replace(" ", "_") in results and results[g.replace(" ", "_")] else pd.NA
+        lambda g: str(results[g.replace(" ", "_")]) if g.replace(" ", "_") in results and results[g.replace(" ", "_")] is not None else pd.NA
     )
 
     n_done = hits["af3_cif_path"].notna().sum()

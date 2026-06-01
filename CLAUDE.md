@@ -110,7 +110,7 @@ af3:
 ### AF3 backends
 - **local** — calls `run_alphafold3.sh input_dir output_dir json_file` via subprocess
 - **hpcc** — scp JSON → SSH sbatch → poll squeue → scp CIF back. Requires key-based SSH auth (`ssh user@host echo ok`)
-- **online** — scaffold only (not implemented)
+- **online** — Chai-1 API (https://chaidiscovery.com). Submits FASTA → polls → downloads CIF. Requires `ECR_CHAI_API_KEY` env var or `af3.online.api_key` in config.yaml.
 
 AF3 JSON format: protein chain A + single-stranded DNA chain B. Job name = gene name. 5 model seeds.
 Output CIF stored in `af3_outputs/<gene_name>/`. `af3_cif_path` column added to TSV.

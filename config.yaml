@@ -39,7 +39,10 @@ af3:
     # Give up after this many seconds (0 = wait forever)
     timeout: 7200
 
-  # ── Online backend (AlphaFold Server) ─────────────────────────────────────
-  # Not yet implemented. Scaffold only.
+  # ── Online backend (Chai-1 API) ───────────────────────────────────────────
+  # Chai-1 is an AF3-class model that supports protein–DNA complexes.
+  # Sign up at https://chaidiscovery.com to get an API key, then set:
+  #   export ECR_CHAI_API_KEY='your_key'
+  # Or paste the key below (do not commit config.yaml with a real key).
   online:
-    api_key: ""   # your AlphaFold Server API key
+    api_key: ""   # Chai-1 API key (prefer env var ECR_CHAI_API_KEY)
