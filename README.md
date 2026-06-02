@@ -15,9 +15,22 @@ parent_dir/
 ```
 
 ```bash
+# Clone both repos
+git clone https://github.com/JimYuhaoWu/eCR_mod_lib.git
+git clone https://github.com/JimYuhaoWu/eCR_predictor.git
+
+# Create and activate the shared conda environment (do this once)
+conda env create -f eCR_predictor/environment.yml
+conda activate ecr
+
+# Install both packages in editable mode
 pip install -e eCR_mod_lib
 pip install -e eCR_predictor
 ```
+
+The `ecr` conda environment covers all dependencies for both projects, including
+MEME Suite (`fimo` binary) for the refinement pipeline.
+If the `ecr` environment already exists (e.g. created from `eCR_mod_lib`), skip the `conda env create` step.
 
 ---
 

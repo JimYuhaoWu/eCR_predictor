@@ -35,14 +35,22 @@ ECR_predictor/
 └── server_run.sh     # run a prediction on the server
 ```
 
-## Sibling repo dependency
+## Environment & sibling repo dependency
 
-`eCR_mod_lib` (`scripts.schema.ModuleLibrary`) must be installed as an editable package alongside this repo:
+Shared conda environment (`ecr`) covers both repos:
 
+```bash
+conda env create -f environment.yml   # once per machine; same env as eCR_mod_lib
+conda activate ecr
+pip install -e ../eCR_mod_lib   # must install mod_lib first
+pip install -e .
+```
+
+Both repos must sit as siblings:
 ```
 parent_dir/
-├── eCR_mod_lib/    ← pip install -e here first
-└── eCR_predictor/  ← pip install -e here second
+├── eCR_mod_lib/
+└── eCR_predictor/
 ```
 
 ## Development workflow

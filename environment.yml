@@ -1,0 +1,15 @@
+name: ecr
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.10
+  - pandas
+  - requests
+  - pyyaml
+  - tqdm
+  - openpyxl
+  - biopython
+  - paramiko
+  - meme          # MEME Suite — provides the fimo binary for eCR_predictor
