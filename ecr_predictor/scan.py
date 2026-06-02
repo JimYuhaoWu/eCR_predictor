@@ -82,13 +82,18 @@ def _fetch_all_parallel(jaspar_ids: list) -> dict:
     with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as executor:
         futures = {executor.submit(_fetch_jaspar_pwm, jid): jid for jid in unique}
         done = 0
+        failed = []
         for future in as_completed(futures):
             jid = futures[future]
             cache[jid] = future.result()
             done += 1
-            status = "ok" if cache[jid] is not None else "FAILED"
-            print(f"  [{done}/{total}] {jid}: {status}", file=sys.stderr)
+            if cache[jid] is None:
+                failed.append(jid)
+            if done % 100 == 0 or done == total:
+                print(f"  {done}/{total} fetched...", file=sys.stderr)
 
+    if failed:
+        print(f"  WARNING: {len(failed)} motifs failed to fetch: {', '.join(failed)}", file=sys.stderr)
     return cache
 
 
