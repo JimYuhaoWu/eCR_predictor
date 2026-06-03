@@ -6,33 +6,41 @@
 - **Surgical changes.** Touch only what the task requires. Don't improve adjacent code, comments, or formatting. Match existing style.
 - **Surface tradeoffs before coding.** If multiple interpretations exist, present them — don't pick silently. If something is unclear, ask.
 - **If you notice unrelated dead code or issues, mention them — don't silently fix them.**
-- **Stubs are stubs.** `af3.py` and `foldx.py` are intentional placeholders — don't flesh them out unless explicitly asked.
 - **Scores are intentionally independent.** `motif_score` and `annotation_confidence` must never be merged into a single composite score without explicit instruction.
 
 ## What this project does
 
-CLI tool that predicts which DNA-Binding Domains (DBDs) from the `eCR_mod_lib` library are likely to bind a given DNA sequence and species. Returns a ranked TSV with two independent confidence scores.
+Two-stage CLI pipeline:
+1. **`cli.py`** — predicts which DBDs from `eCR_mod_lib` are likely to bind a query DNA sequence. Returns a ranked TSV with two independent confidence scores.
+2. **`refine.py`** — filters, FIMO-validates, runs AF3 structure prediction, and estimates binding affinity with FoldX.
 
 ## Repo layout
 
 ```
 ECR_predictor/
 ├── ecr_predictor/
-│   ├── query.py      # DBD lookup + species matching (exact → genus fallback)
-│   ├── scan.py       # JASPAR PWM scoring via BioPython
-│   ├── score.py      # validation_level → annotation_confidence label
-│   ├── output.py     # build result table, write TSV
-│   ├── prefetch.py   # pre-download JASPAR motifs to jaspar_cache/
-│   ├── filter.py     # drop low-confidence hits (annotation + motif_score)
-│   ├── fimo.py       # FIMO motif validation (requires MEME Suite)
-│   ├── af3.py        # AlphaFold 3 structure prediction (stub — see TODOs)
-│   └── foldx.py      # FoldX binding affinity estimation (stub — see TODOs)
-├── jaspar_cache/     # .jaspar files stored here after prefetch (gitignored)
-├── af3_outputs/      # AF3 JSON inputs + structure outputs (created by refine.py)
-├── cli.py            # prediction entrypoint
-├── refine.py         # refinement entrypoint (filter → FIMO → AF3 → FoldX)
-├── server_setup.sh   # one-time server setup (install + seed DB + prefetch motifs)
-└── server_run.sh     # run a prediction on the server
+│   ├── query.py          # DBD lookup + species matching (exact → genus fallback)
+│   ├── scan.py           # JASPAR PWM scoring via BioPython (parallel fetch)
+│   ├── score.py          # validation_level → annotation_confidence label
+│   ├── output.py         # build result table, write TSV
+│   ├── prefetch.py       # pre-download JASPAR motifs to jaspar_cache/
+│   ├── filter.py         # drop low-confidence hits (annotation + motif_score)
+│   ├── fimo.py           # FIMO motif validation (requires MEME Suite)
+│   ├── af3.py            # AF3 structure prediction (local / hpcc / online backends)
+│   ├── foldx.py          # FoldX binding affinity estimation (stub — see TODOs)
+│   └── config.py         # load/validate config.yaml
+├── jaspar_cache/          # .jaspar files after prefetch (gitignored)
+├── af3_outputs/           # AF3 JSON inputs, CIF outputs, run_log.json (gitignored)
+│   └── jobs/
+│       ├── <gene>.json       # AF3 input per job
+│       ├── <gene>.slurm      # generated Slurm script (hpcc backend)
+│       └── run_log.json      # job state log for resume on interruption
+├── cli.py                 # Step 1 entrypoint
+├── refine.py              # Step 2 entrypoint
+├── config.example.yaml    # config template — copy to config.yaml and edit
+├── environment.yml        # shared conda environment (covers both repos)
+├── server_setup.sh        # one-time server setup (install + seed DB + prefetch)
+└── server_run.sh          # run a prediction on the server
 ```
 
 ## Environment & sibling repo dependency
@@ -40,9 +48,9 @@ ECR_predictor/
 Shared conda environment (`ecr`) covers both repos:
 
 ```bash
-conda env create -f environment.yml   # once per machine; same env as eCR_mod_lib
+conda env create -f environment.yml   # once per machine
 conda activate ecr
-pip install -e ../eCR_mod_lib   # must install mod_lib first
+pip install -e ../eCR_mod_lib         # must install mod_lib first
 pip install -e .
 ```
 
@@ -53,22 +61,34 @@ parent_dir/
 └── eCR_predictor/
 ```
 
+Default DB path resolves to `../eCR_mod_lib/library/module_library.db`. Override with `--db`.
+
 ## Development workflow
 
-- **Develop and test locally on PC** — run `cli.py` directly:
-  ```bash
-  python cli.py --sequence <SEQ> --species "Homo sapiens" --db path/to/module_library.db
-  ```
-- **Deploy to server** — `git pull` in both repos, then re-run `server_setup.sh` if the DB or motif cache needs updating.
+```bash
+# Step 1 — predict
+python cli.py \
+  --sequence ACAGGAAGTGACAGGAAGTGACAGGAAGTG \
+  --species "Homo sapiens" \
+  --output predictions.tsv \
+  --include-sequence          # required for AF3 stage
+
+# Step 2 — refine
+python refine.py \
+  --input predictions.tsv \
+  --sequence ACAGGAAGTGACAGGAAGTGACAGGAAGTG \
+  --config config.yaml \
+  [--stop-after fimo]         # omit to run through AF3
+```
+
+Deploy to server: `git pull` in both repos, re-run `server_setup.sh` if DB or motif cache needs updating.
 
 ## JASPAR motif fetch order
 
 `scan.py` resolves motifs in this priority order:
-1. `jaspar_cache/<id>.jaspar` — local file written by `prefetch.py` (fastest, no network)
+1. `jaspar_cache/<id>.jaspar` — local file (fastest, no network)
 2. BioPython `JASPAR2020` local DB — if the `jaspar2020` package is installed
 3. JASPAR REST API (`https://jaspar.elixir.no/api/v1/`) — fallback, requires internet
-
-On the server, run `server_setup.sh` once to populate the cache. Subsequent runs are fully offline.
 
 ## Confidence scores
 
@@ -86,56 +106,100 @@ Two columns, intentionally independent:
 
 ## Refinement pipeline (refine.py)
 
-Runs downstream validation on `cli.py` output. Use `--include-sequence` in `cli.py` to enable AF3.
+### Parameters
 
-```bash
-python cli.py --sequence <SEQ> --species "Homo sapiens" --output results.tsv --include-sequence
-python refine.py --input results.tsv --sequence <SEQ> --config config.yaml [--stop-after fimo]
-```
+| Flag | Default | Description |
+|---|---|---|
+| `--input` | *(required)* | Predictor output TSV from `cli.py` |
+| `--sequence` | *(required)* | Same DNA sequence used in `cli.py` |
+| `--config` | `config.yaml` in repo root | Path to config.yaml |
+| `--output` | `<input>_refined.tsv` | Output TSV path |
+| `--min-motif-score` | `0.0` | Filter threshold for motif_score |
+| `--fimo-pvalue` | `1e-4` | FIMO p-value cutoff for validation |
+| `--top-n-af3` | `2` | Number of top hits sent to AF3 |
+| `--stop-after` | *(none)* | Stop after `filter`, `fimo`, `af3`, or `foldx` |
+| `--af3-output-dir` | `af3_outputs/` | Local dir for AF3 inputs/outputs |
 
-| Stage | Flag | Status | Prerequisite |
-|---|---|---|---|
-| Filter | always on | done | — |
-| FIMO | `--fimo-pvalue` | done | MEME Suite on PATH |
-| AF3 | `--top-n-af3` | done | configure `config.yaml` |
-| FoldX | automatic | stub | see `ecr_predictor/foldx.py` TODOs |
+### Stages
 
-### config.yaml
-`config.yaml` is gitignored (contains passwords/hosts). Copy from the template and edit:
-```bash
-cp config.example.yaml config.yaml
-```
-```yaml
-af3:
-  backend: hpcc   # local | hpcc | online
-  hpcc:
-    host: hpcc.example.edu
-    user: wuyuhao
-    remote_workdir: /scratch/wuyuhao/ecr_af3_jobs
-    slurm_partition: a40-tmp
-    slurm_qos: gpu
-    slurm_module: alphafold/3_a40-tmp
-    ...
-```
-
-### AF3 backends
-- **local** — calls `run_alphafold3.sh input_dir output_dir json_file` via subprocess
-- **hpcc** — scp JSON → SSH sbatch → poll squeue → scp CIF back. Requires key-based SSH auth (`ssh user@host echo ok`)
-- **online** — Chai-1 API (https://chaidiscovery.com). Submits FASTA → polls → downloads CIF. Requires `ECR_CHAI_API_KEY` env var or `af3.online.api_key` in config.yaml.
-
-AF3 JSON format: protein chain A + single-stranded DNA chain B. Job name = gene name. 5 model seeds.
-Output CIF stored in `af3_outputs/<gene_name>/`. `af3_cif_path` column added to TSV.
+| Stage | Status | Prerequisite |
+|---|---|---|
+| Filter | done | — |
+| FIMO | done | MEME Suite on PATH |
+| AF3 | done | configure `config.yaml` |
+| FoldX | stub | see `ecr_predictor/foldx.py` TODOs |
 
 ### Filter logic
 Drops rows where **both** are true: `annotation_confidence == 'low'` AND `motif_score < --min-motif-score` (default 0.0; NA counts as below threshold).
 
 ### FIMO
-- Converts JASPAR cache → MEME format on the fly.
+- Converts JASPAR cache → MEME format on the fly (no extra files needed).
+- Calls `fimo --text` on the query sequence.
 - Adds `fimo_pvalue` and `fimo_validated` columns. Best (lowest) p-value per motif is reported.
 
+### AF3 backends
+
+Selected via `af3.backend` in `config.yaml`:
+
+- **`local`** — calls `run_alphafold3.sh input_dir output_dir json_file` via `bash -c`. Handles `module load` via `af3.local.module_load`. Use when running `refine.py` interactively on the HPCC.
+- **`hpcc`** — uploads JSON via SFTP, submits via `sbatch` over SSH (password auth via `paramiko`), polls `squeue`, downloads CIF back. Requires `ECR_HPCC_PASSWORD` env var or `af3.hpcc.ssh_password` in config.yaml.
+- **`online`** — Chai-1 API (https://chaidiscovery.com). Submits protein+DNA FASTA, polls, downloads CIF. Requires `ECR_CHAI_API_KEY` env var or `af3.online.api_key` in config.yaml.
+
+AF3 JSON: protein chain A + single-stranded DNA chain B. `modelSeeds: [1]`. Job name = gene name (spaces → underscores). AF3 lowercases the job name for its output dir: `FLI1` → `fli1/fli1_model.cif`.
+
+### AF3 run log (resume on interruption)
+
+State is persisted to `af3_outputs/jobs/run_log.json` after every transition:
+
+```json
+{
+  "FLI1": {
+    "job_id": "7888566",
+    "status": "completed",
+    "local_cif": "af3_outputs/fli1/fli1_model.cif",
+    "submitted_at": "2026-06-01T08:00:00Z"
+  }
+}
+```
+
+Statuses: `submitted` → `running` → `completed` | `failed` | `cancelled` | `download_failed`
+
+Resume behaviour on re-run:
+- `completed` + CIF on disk → returned immediately, no SSH
+- `submitted` / `running` + job_id → re-attaches and re-polls
+- `failed` / `cancelled` / no entry → re-submits
+- `download_failed` → re-polls then re-downloads
+
+To force re-submission of a specific job, delete its entry from `run_log.json`.
+
+### config.yaml
+
+`config.yaml` is gitignored. Copy from the template:
+```bash
+cp config.example.yaml config.yaml
+```
+
+Key fields for the HPCC backend:
+```yaml
+af3:
+  backend: hpcc
+  hpcc:
+    host: 172.16.78.132
+    port: 10004
+    user: zhaochengchen
+    ssh_password: ""          # prefer ECR_HPCC_PASSWORD env var
+    remote_workdir: /home/peiduanqingLab/zhaochengchen/storage/Work/af3/ecr_af3_jobs
+    slurm_partition: a40-tmp
+    slurm_qos: gpu
+    slurm_module: alphafold/3_a40-tmp
+    poll_interval: 60
+    timeout: 7200
+```
+
 ### FoldX
-- RepairPDB → AnalyseComplex on each AF3 CIF. Output: `foldx_ddg_kcal_mol` (lower = stronger binding).
-- Output parsing (`Interaction_*_AC.fxout`) marked TODO in `ecr_predictor/foldx.py`.
+- RepairPDB → AnalyseComplex on each AF3 CIF. Output column: `foldx_ddg_kcal_mol` (lower = stronger binding).
+- FoldX binary: set `FOLDX_PATH` env var, or place at `~/foldx/foldx`.
+- Output file parsing (`Interaction_*_AC.fxout`) marked TODO in `ecr_predictor/foldx.py`.
 
 ## Key implementation notes
 
@@ -144,3 +208,5 @@ Drops rows where **both** are true: `annotation_confidence == 'low'` AND `motif_
 - `pssm.calculate()` returns a scalar when sequence length == motif length; wrapped with `np.atleast_1d`.
 - Sequences shorter than a motif return `motif_score = NA` (not an error).
 - Motif fetches are parallelized with `ThreadPoolExecutor` (8 workers).
+- Python 3.8 compatibility required (server constraint) — `with_stem()` unavailable, use `with_name()`.
+- `paramiko` and `pyyaml` are required for the refinement pipeline (included in `environment.yml`).
