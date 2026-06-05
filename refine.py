@@ -169,9 +169,9 @@ def main(argv: list[str] | None = None) -> None:
     print("\n[4/4] Estimating binding affinity with FoldX...", file=sys.stderr)
     from ecr_predictor.foldx import run_foldx_affinity
     try:
-        df = run_foldx_affinity(df)
-    except (NotImplementedError, FileNotFoundError) as e:
-        print(f"NOTE: FoldX not yet implemented — stopping after AF3 output.\n  {e}", file=sys.stderr)
+        df = run_foldx_affinity(df, work_base_dir=Path(args.af3_output_dir).parent / "foldx_work")
+    except FileNotFoundError as e:
+        print(f"NOTE: FoldX binary not found — skipping affinity step.\n  {e}", file=sys.stderr)
         _write(df, output_path)
         return
 

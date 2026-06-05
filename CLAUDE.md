@@ -127,7 +127,7 @@ Two columns, intentionally independent:
 | Filter | done | — |
 | FIMO | done | MEME Suite on PATH |
 | AF3 | done | configure `config.yaml` |
-| FoldX | stub | see `ecr_predictor/foldx.py` TODOs |
+| FoldX | done | `FOLDX_PATH` env var; biopython for CIF→PDB |
 
 ### Filter logic
 Drops rows where **both** are true: `annotation_confidence == 'low'` AND `motif_score < --min-motif-score` (default 0.0; NA counts as below threshold).
@@ -197,9 +197,11 @@ af3:
 ```
 
 ### FoldX
-- RepairPDB → AnalyseComplex on each AF3 CIF. Output column: `foldx_ddg_kcal_mol` (lower = stronger binding).
-- FoldX binary: set `FOLDX_PATH` env var, or place at `~/foldx/foldx`.
-- Output file parsing (`Interaction_*_AC.fxout`) marked TODO in `ecr_predictor/foldx.py`.
+- CIF → PDB conversion (BioPython) → RepairPDB → AnalyseComplex.
+- Output column: `foldx_ddg_kcal_mol` in kcal/mol (lower = stronger binding).
+- Intermediate files written to `foldx_work/<gene>/` (persistent — RepairPDB is skipped on re-run if already done, as it takes ~4 min per structure).
+- FoldX binary: set `FOLDX_PATH` env var (e.g. `export FOLDX_PATH=/mnt3/wuyuhao/foldx/foldx`).
+- FoldX cannot resolve `~` in paths — all paths are fully resolved before use.
 
 ## Key implementation notes
 
