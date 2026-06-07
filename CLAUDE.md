@@ -184,11 +184,11 @@ Key fields for the HPCC backend:
 af3:
   backend: hpcc
   hpcc:
-    host: 172.16.78.132
-    port: 10004
-    user: zhaochengchen
+    host: hpcc.example.edu
+    port: 22
+    user: your_username
     ssh_password: ""          # prefer ECR_HPCC_PASSWORD env var
-    remote_workdir: /home/peiduanqingLab/zhaochengchen/storage/Work/af3/ecr_af3_jobs
+    remote_workdir: /scratch/your_username/ecr_af3_jobs
     slurm_partition: a40-tmp
     slurm_qos: gpu
     slurm_module: alphafold/3_a40-tmp
@@ -200,7 +200,7 @@ af3:
 - CIF → PDB conversion (BioPython) → RepairPDB → AnalyseComplex.
 - Output column: `foldx_ddg_kcal_mol` in kcal/mol (lower = stronger binding).
 - Intermediate files written to `foldx_work/<gene>/` (persistent — RepairPDB is skipped on re-run if already done, as it takes ~4 min per structure).
-- FoldX binary: set `FOLDX_PATH` env var (e.g. `export FOLDX_PATH=/mnt3/wuyuhao/foldx/foldx`).
+- FoldX binary: set `FOLDX_PATH` env var (e.g. `export FOLDX_PATH=/path/to/foldx/foldx`).
 - FoldX cannot resolve `~` in paths — all paths are fully resolved before use.
 
 ## Key implementation notes

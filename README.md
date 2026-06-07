@@ -130,9 +130,15 @@ Adds column: `af3_cif_path`.
 
 **Resume on interruption:** job state is persisted to `af3_outputs/jobs/run_log.json`. Re-running `refine.py` automatically resumes — re-polling running jobs, re-downloading failed downloads, skipping completed ones. To force re-submission of a specific job, delete its entry from the log file.
 
-### Stage 4 — FoldX *(stub)*
+### Stage 4 — FoldX
 
-Estimates binding affinity from AF3 structures via RepairPDB → AnalyseComplex. Not yet fully implemented — see `ecr_predictor/foldx.py`.
+Estimates binding affinity from AF3 structures via RepairPDB → AnalyseComplex. Requires FoldX 5 installed on the server.
+
+```bash
+export FOLDX_PATH=/path/to/foldx/foldx
+```
+
+Adds column: `foldx_ddg_kcal_mol` in kcal/mol (lower = stronger predicted binding). Intermediate files are written to `foldx_work/<gene>/` and reused on re-runs (RepairPDB takes ~4 min per structure). If `FOLDX_PATH` is not set, this stage is skipped with a warning.
 
 ---
 
@@ -149,11 +155,11 @@ cp config.example.yaml config.yaml
 af3:
   backend: hpcc
   hpcc:
-    host: 172.16.78.132
-    port: 10004
-    user: zhaochengchen
+    host: hpcc.example.edu
+    port: 22
+    user: your_username
     ssh_password: ""          # or set ECR_HPCC_PASSWORD env var
-    remote_workdir: /home/peiduanqingLab/zhaochengchen/storage/Work/af3/ecr_af3_jobs
+    remote_workdir: /scratch/your_username/ecr_af3_jobs
     slurm_partition: a40-tmp
     slurm_qos: gpu
     slurm_module: alphafold/3_a40-tmp
@@ -193,7 +199,7 @@ ECR_predictor/
 │   ├── filter.py         # confidence + score filtering
 │   ├── fimo.py           # FIMO validation (JASPAR → MEME format + fimo call)
 │   ├── af3.py            # AF3 prediction (local / hpcc / online backends)
-│   ├── foldx.py          # FoldX affinity estimation (stub)
+│   ├── foldx.py          # FoldX affinity estimation
 │   └── config.py         # load/validate config.yaml
 ├── jaspar_cache/          # populated by server_setup.sh (gitignored)
 ├── af3_outputs/           # AF3 inputs, CIF outputs, run_log.json (gitignored)
@@ -218,4 +224,4 @@ All managed via `environment.yml`:
 - [paramiko](https://www.paramiko.org/) — SSH/SFTP for HPCC backend
 - [pyyaml](https://pyyaml.org/) — config file parsing
 - [MEME Suite](https://meme-suite.org/) — FIMO stage (external tool, included in conda env)
-- [FoldX](https://foldxsuite.crg.eu/) — affinity stage (external tool, stub)
+- [FoldX](https://foldxsuite.crg.eu/) — affinity stage (external tool, free academic licence)
