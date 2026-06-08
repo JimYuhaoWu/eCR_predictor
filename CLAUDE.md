@@ -142,7 +142,7 @@ Drops rows where **both** are true: `annotation_confidence == 'low'` AND `motif_
 Selected via `af3.backend` in `config.yaml`:
 
 - **`local`** — calls `run_alphafold3.sh input_dir output_dir json_file` via `bash -c`. Handles `module load` via `af3.local.module_load`. Use when running `refine.py` interactively on the HPCC.
-- **`hpcc`** — uploads JSON via SFTP, submits via `sbatch` over SSH (password auth via `paramiko`), polls `squeue`, downloads CIF back. Requires `ECR_HPCC_PASSWORD` env var or `af3.hpcc.ssh_password` in config.yaml.
+- **`hpcc`** — uploads JSON via SFTP, submits via `sbatch` over SSH, polls `squeue`, downloads CIF back. Supports two authentication methods (see below). Requires `af3.hpcc.auth_method` configured.
 - **`online`** — Chai-1 API (https://chaidiscovery.com). Submits protein+DNA FASTA, polls, downloads CIF. Requires `ECR_CHAI_API_KEY` env var or `af3.online.api_key` in config.yaml.
 
 AF3 JSON: protein chain A + single-stranded DNA chain B. `modelSeeds: [1]`. Job name = gene name (spaces → underscores). AF3 lowercases the job name for its output dir: `FLI1` → `fli1/fli1_model.cif`.
@@ -187,7 +187,16 @@ af3:
     host: hpcc.example.edu
     port: 22
     user: your_username
-    ssh_password: ""          # prefer ECR_HPCC_PASSWORD env var
+    
+    # Authentication: choose 'password' or 'totp'
+    auth_method: password
+    
+    # For password-based auth (static password):
+    ssh_password: ""          # or set ECR_HPCC_PASSWORD env var
+    
+    # For TOTP-based auth (time-based one-time passwords):
+    totp_secret: ""           # or set ECR_HPCC_TOTP_SECRET env var
+    
     remote_workdir: /scratch/your_username/ecr_af3_jobs
     slurm_partition: a40-tmp
     slurm_qos: gpu
@@ -195,6 +204,10 @@ af3:
     poll_interval: 60
     timeout: 7200
 ```
+
+**Authentication methods:**
+- **`password`** — Static password from `ECR_HPCC_PASSWORD` env var or `af3.hpcc.ssh_password` in config.yaml.
+- **`totp`** — Time-based one-time passwords (FreeOTP). Provide the shared secret via `ECR_HPCC_TOTP_SECRET` env var or `af3.hpcc.totp_secret` in config.yaml. The script generates codes automatically.
 
 ### FoldX
 - CIF → PDB conversion (BioPython) → RepairPDB → AnalyseComplex.

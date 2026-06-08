@@ -7,10 +7,13 @@ AlphaFold 3 structure prediction — three backends.
 
 Select backend in config.yaml:  af3.backend: local | hpcc | online
 
-SSH auth (hpcc backend): password-based via paramiko.
-  Password is read from the ECR_HPCC_PASSWORD environment variable first,
-  then falls back to af3.hpcc.ssh_password in config.yaml.
-  Set it with: export ECR_HPCC_PASSWORD='yourpassword'
+SSH auth (hpcc backend): two methods via paramiko.
+  1. Password-based: static password from ECR_HPCC_PASSWORD env var or af3.hpcc.ssh_password
+  2. TOTP-based: time-based OTP from ECR_HPCC_TOTP_SECRET env var or af3.hpcc.totp_secret
+
+  Set auth_method in config.yaml to 'password' or 'totp'.
+  For password: export ECR_HPCC_PASSWORD='yourpassword'
+  For TOTP: export ECR_HPCC_TOTP_SECRET='JBSWY3DPEBLW64TMMQ======'
 
 JSON format follows the AF3 input spec:
   https://github.com/google-deepmind/alphafold3#input-format
@@ -189,20 +192,53 @@ run_alphafold3.sh "$input_dir" "$output_dir" "{json_filename}"
 
 def _get_password(hpcc: dict[str, Any]) -> str:
     """
-    Resolve the SSH password.
-    Priority: ECR_HPCC_PASSWORD env var → config ssh_password field.
+    Resolve the SSH password based on the configured auth method.
+
+    For password auth: returns static password (from ECR_HPCC_PASSWORD env var or config).
+    For TOTP auth: generates and returns a TOTP code from the shared secret
+                   (from ECR_HPCC_TOTP_SECRET env var or config).
     """
-    pw = os.environ.get("ECR_HPCC_PASSWORD", "")
-    if pw:
-        return pw
-    pw = hpcc.get("ssh_password", "")
-    if pw:
-        return pw
-    raise ValueError(
-        "HPCC password not found. Set the ECR_HPCC_PASSWORD environment variable:\n"
-        "  export ECR_HPCC_PASSWORD='yourpassword'\n"
-        "Or set af3.hpcc.ssh_password in config.yaml."
-    )
+    auth_method = hpcc.get("auth_method", "password").lower()
+
+    if auth_method == "totp":
+        # TOTP-based authentication
+        try:
+            import pyotp
+        except ImportError:
+            raise ImportError("pyotp is required for TOTP authentication: pip install pyotp")
+
+        secret = os.environ.get("ECR_HPCC_TOTP_SECRET", "")
+        if not secret:
+            secret = hpcc.get("totp_secret", "")
+        if not secret:
+            raise ValueError(
+                "HPCC TOTP secret not found. Set the ECR_HPCC_TOTP_SECRET environment variable:\n"
+                "  export ECR_HPCC_TOTP_SECRET='JBSWY3DPEBLW64TMMQ======'\n"
+                "Or set af3.hpcc.totp_secret in config.yaml."
+            )
+
+        totp = pyotp.TOTP(secret)
+        code = totp.now()
+        return code
+
+    elif auth_method == "password":
+        # Static password authentication
+        pw = os.environ.get("ECR_HPCC_PASSWORD", "")
+        if pw:
+            return pw
+        pw = hpcc.get("ssh_password", "")
+        if pw:
+            return pw
+        raise ValueError(
+            "HPCC password not found. Set the ECR_HPCC_PASSWORD environment variable:\n"
+            "  export ECR_HPCC_PASSWORD='yourpassword'\n"
+            "Or set af3.hpcc.ssh_password in config.yaml."
+        )
+
+    else:
+        raise ValueError(
+            f"Invalid auth_method '{auth_method}'. Must be 'password' or 'totp'."
+        )
 
 
 @contextmanager

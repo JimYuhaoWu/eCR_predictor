@@ -12,4 +12,5 @@ dependencies:
   - openpyxl
   - biopython
   - paramiko
+  - pyotp         # TOTP code generation for HPCC TOTP-based authentication
   - meme          # MEME Suite — provides the fimo binary for eCR_predictor

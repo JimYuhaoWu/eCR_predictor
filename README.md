@@ -158,7 +158,16 @@ af3:
     host: hpcc.example.edu
     port: 22
     user: your_username
+    
+    # Authentication: choose 'password' or 'totp'
+    auth_method: password
+    
+    # For password-based auth:
     ssh_password: ""          # or set ECR_HPCC_PASSWORD env var
+    
+    # For TOTP-based auth (FreeOTP):
+    totp_secret: ""           # or set ECR_HPCC_TOTP_SECRET env var
+    
     remote_workdir: /scratch/your_username/ecr_af3_jobs
     slurm_partition: a40-tmp
     slurm_qos: gpu
