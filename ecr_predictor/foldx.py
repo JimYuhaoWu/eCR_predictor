@@ -2,9 +2,10 @@
 FoldX binding affinity estimation.
 
 Workflow per hit:
-  1. Convert AF3 CIF → PDB (FoldX 5.1 does not read CIF)
-  2. RepairPDB  — fix missing atoms / steric clashes
-  3. AnalyseComplex — compute interaction ΔΔG between protein and DNA chains
+  1. Optionally trim CIF termini (low confidence loops)
+  2. Convert AF3 CIF → PDB (FoldX 5.1 does not read CIF)
+  3. RepairPDB  — fix missing atoms / steric clashes
+  4. AnalyseComplex — compute interaction ΔΔG between protein and DNA chains
 
 Prerequisites:
   - FoldX binary: https://foldxsuite.crg.eu/ (free academic licence)
@@ -14,6 +15,11 @@ Prerequisites:
 
 Note: FoldX cannot resolve '~' in paths. All paths passed to it are
 fully resolved with Path.resolve() before use.
+
+Confidence-based trimming:
+  Removes low-confidence terminal loops (N and C termini) from the protein
+  chain before FoldX analysis. Uses a sliding window over pLDDT scores
+  (encoded in B-factors) to identify well-ordered regions.
 """
 from __future__ import annotations
 
@@ -50,6 +56,99 @@ def _check_foldx() -> Path:
         "  export FOLDX_PATH=/path/to/foldx\n"
         "Download: https://foldxsuite.crg.eu/"
     )
+
+
+# ---------------------------------------------------------------------------
+# Confidence-based terminal loop trimming
+# ---------------------------------------------------------------------------
+
+def _trim_cif_by_confidence(
+    cif_path: Path,
+    output_path: Path,
+    protein_chain: str = "A",
+    confidence_threshold: float = 70.0,
+    window_size: int = 3,
+) -> tuple[int, int]:
+    """
+    Trim low-confidence terminal loops from the CIF structure.
+
+    Uses a sliding window over B-factors (which encode pLDDT confidence in AF3 CIF)
+    to identify and remove terminal loops below the confidence threshold.
+
+    Parameters
+    ----------
+    cif_path : Path to input CIF file
+    output_path : Path to write trimmed CIF
+    protein_chain : chain ID to trim (default 'A')
+    confidence_threshold : minimum B-factor (pLDDT) to retain (default 70)
+    window_size : sliding window size for averaging (default 3)
+
+    Returns
+    -------
+    (n_trim, c_trim) : number of residues trimmed from N and C termini
+    """
+    from Bio.PDB import MMCIFParser, MMCIFIO
+
+    parser = MMCIFParser(QUIET=True)
+    struct = parser.get_structure(cif_path.stem, str(cif_path))
+
+    # Extract residues for the protein chain
+    model = struct[0]
+    if protein_chain not in model:
+        raise ValueError(f"Chain {protein_chain} not found in CIF")
+
+    chain = model[protein_chain]
+    residues = list(chain.get_residues())
+
+    if not residues:
+        raise ValueError(f"No residues found in chain {protein_chain}")
+
+    # Extract B-factors (pLDDT) per residue (use CA atom)
+    bfactors = []
+    for res in residues:
+        if "CA" in res:
+            ca = res["CA"]
+            bfactors.append(ca.get_bfactor())
+        else:
+            # If no CA, skip this residue
+            bfactors.append(0.0)
+
+    # Find N-terminus cutoff (sliding window from start)
+    n_trim_idx = 0
+    for i in range(len(residues)):
+        window_end = min(i + window_size, len(residues))
+        window_bfactors = bfactors[i:window_end]
+        avg_bfactor = sum(window_bfactors) / len(window_bfactors)
+
+        if avg_bfactor >= confidence_threshold:
+            n_trim_idx = i
+            break
+
+    # Find C-terminus cutoff (sliding window from end)
+    c_trim_idx = len(residues)
+    for i in range(len(residues) - 1, -1, -1):
+        window_start = max(i - window_size + 1, 0)
+        window_bfactors = bfactors[window_start : i + 1]
+        avg_bfactor = sum(window_bfactors) / len(window_bfactors)
+
+        if avg_bfactor >= confidence_threshold:
+            c_trim_idx = i + 1
+            break
+
+    # Remove residues outside the [n_trim_idx, c_trim_idx) range
+    for i in range(len(residues) - 1, -1, -1):
+        if i < n_trim_idx or i >= c_trim_idx:
+            chain.detach_child(residues[i].id)
+
+    # Write trimmed structure
+    io = MMCIFIO()
+    io.set_structure(struct)
+    io.save(str(output_path))
+
+    n_trimmed = n_trim_idx
+    c_trimmed = len(residues) - c_trim_idx
+
+    return n_trimmed, c_trimmed
 
 
 # ---------------------------------------------------------------------------
@@ -168,22 +267,56 @@ def _repair_and_analyse(
     work_dir: Path,
     protein_chain: str,
     dna_chain: str,
+    confidence_threshold: float | None = None,
+    window_size: int = 3,
 ) -> float | None:
     """
     Convert CIF → PDB, run RepairPDB, run AnalyseComplex, return ΔΔG.
 
-    work_dir is a persistent per-gene directory (not a tempdir) so outputs
-    are inspectable and RepairPDB is not re-run if already done.
+    Optionally trims low-confidence terminal loops before FoldX analysis.
+
+    Parameters
+    ----------
+    foldx_bin : path to FoldX binary
+    cif_path : path to input CIF from AF3
+    work_dir : persistent per-gene directory for outputs
+    protein_chain : chain ID for protein in CIF
+    dna_chain : chain ID for DNA in CIF
+    confidence_threshold : if set, trim terminal loops below this pLDDT (e.g., 70)
+    window_size : sliding window size for confidence estimation (default 3)
+
+    Returns
+    -------
+    ddg : ΔΔG value (kcal/mol) or None on failure
     """
     work_dir = work_dir.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Optionally trim low-confidence terminal loops
+    cif_to_convert = cif_path.resolve()
+    if confidence_threshold is not None:
+        trimmed_cif = work_dir / (cif_path.stem + "_trimmed.cif")
+        if not trimmed_cif.exists():
+            print(f"    Trimming terminal loops (threshold={confidence_threshold})...", file=sys.stderr)
+            try:
+                n_trim, c_trim = _trim_cif_by_confidence(
+                    cif_to_convert,
+                    trimmed_cif,
+                    protein_chain=protein_chain,
+                    confidence_threshold=confidence_threshold,
+                    window_size=window_size,
+                )
+                print(f"    Trimmed: {n_trim} N-terminus + {c_trim} C-terminus residues", file=sys.stderr)
+                cif_to_convert = trimmed_cif
+            except Exception as e:
+                print(f"    WARNING: trimming failed ({e}), skipping trim", file=sys.stderr)
 
     # CIF → PDB
     pdb_name = cif_path.stem + ".pdb"
     pdb_path = work_dir / pdb_name
     if not pdb_path.exists():
         print(f"    Converting CIF → PDB...", file=sys.stderr)
-        _cif_to_pdb(cif_path.resolve(), pdb_path)
+        _cif_to_pdb(cif_to_convert, pdb_path)
 
     # RepairPDB (skip if already done)
     repaired_name = cif_path.stem + "_Repair.pdb"
@@ -220,16 +353,23 @@ def run_foldx_affinity(
     protein_chain: str = "A",
     dna_chain: str = "B",
     work_base_dir: str | Path = "foldx_work",
+    confidence_threshold: float | None = 70.0,
+    window_size: int = 3,
 ) -> pd.DataFrame:
     """
     Estimate binding affinity with FoldX for hits that have an AF3 structure.
+
+    Optionally trims low-confidence terminal loops before FoldX analysis.
 
     Parameters
     ----------
     hits : must have 'gene_name' and 'af3_cif_path' columns (from af3.py)
     protein_chain : chain ID for the DBD in the predicted structure (default A)
-    dna_chain     : chain ID for the DNA in the predicted structure (default B)
+    dna_chain : chain ID for the DNA in the predicted structure (default B)
     work_base_dir : directory for FoldX intermediate files (default foldx_work/)
+    confidence_threshold : minimum pLDDT to retain at termini (default 70.0).
+                           Set to None to disable trimming.
+    window_size : sliding window size for confidence estimation (default 3)
 
     Returns
     -------
@@ -259,8 +399,12 @@ def run_foldx_affinity(
 
         print(f"  [FoldX] {gene}...", file=sys.stderr)
         work_dir = work_base_dir / gene.lower()
-        ddg = _repair_and_analyse(foldx_bin, cif_path, work_dir,
-                                  protein_chain, dna_chain)
+        ddg = _repair_and_analyse(
+            foldx_bin, cif_path, work_dir,
+            protein_chain, dna_chain,
+            confidence_threshold=confidence_threshold,
+            window_size=window_size,
+        )
         if ddg is not None:
             hits.at[idx, "foldx_ddg_kcal_mol"] = ddg
             print(f"    ΔΔG = {ddg:.3f} kcal/mol", file=sys.stderr)

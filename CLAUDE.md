@@ -210,11 +210,18 @@ af3:
 - **`totp`** — Time-based one-time passwords (FreeOTP). Provide the shared secret via `ECR_HPCC_TOTP_SECRET` env var or `af3.hpcc.totp_secret` in config.yaml. The script generates codes automatically.
 
 ### FoldX
+- Optionally trims low-confidence terminal loops from the protein (default threshold: pLDDT ≥ 70).
 - CIF → PDB conversion (BioPython) → RepairPDB → AnalyseComplex.
 - Output column: `foldx_ddg_kcal_mol` in kcal/mol (lower = stronger binding).
 - Intermediate files written to `foldx_work/<gene>/` (persistent — RepairPDB is skipped on re-run if already done, as it takes ~4 min per structure).
 - FoldX binary: set `FOLDX_PATH` env var (e.g. `export FOLDX_PATH=/path/to/foldx/foldx`).
 - FoldX cannot resolve `~` in paths — all paths are fully resolved before use.
+
+**Confidence-based trimming:**
+- Uses sliding window (default window size = 3) over pLDDT scores (B-factors in AF3 CIF).
+- Removes residues from both termini until reaching the confidence threshold.
+- Set `confidence_threshold=None` in code to disable trimming.
+- Configurable via `refine.py` parameters (future: add CLI flags if needed).
 
 ## Key implementation notes
 

@@ -132,7 +132,11 @@ Adds column: `af3_cif_path`.
 
 ### Stage 4 — FoldX
 
-Estimates binding affinity from AF3 structures via RepairPDB → AnalyseComplex. Requires FoldX 5 installed on the server.
+Estimates binding affinity from AF3 structures. By default, trims low-confidence terminal loops before analysis to improve prediction accuracy.
+
+**Trimming:** Removes residues from protein termini with pLDDT < 70 (configurable). Uses a sliding window strategy to identify high-confidence regions. This typically removes 5–45% of residues at the termini, depending on protein length and prediction quality.
+
+**FoldX workflow:** Trimmed CIF → PDB conversion → RepairPDB → AnalyseComplex. Requires FoldX 5 installed on the server:
 
 ```bash
 export FOLDX_PATH=/path/to/foldx/foldx
