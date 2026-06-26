@@ -145,7 +145,7 @@ Selected via `af3.backend` in `config.yaml`:
 - **`hpcc`** — uploads JSON via SFTP, submits via `sbatch` over SSH, polls `squeue`, downloads CIF back. Supports two authentication methods (see below). Requires `af3.hpcc.auth_method` configured.
 - **`online`** — Chai-1 API (https://chaidiscovery.com). Submits protein+DNA FASTA, polls, downloads CIF. Requires `ECR_CHAI_API_KEY` env var or `af3.online.api_key` in config.yaml.
 
-AF3 JSON: protein chain A + single-stranded DNA chain B. `modelSeeds: [1]`. Job name = gene name (spaces → underscores). AF3 lowercases the job name for its output dir: `FLI1` → `fli1/fli1_model.cif`.
+AF3 JSON: protein chain A + double-stranded DNA — chain B = query (sense) strand, chain C = auto-generated reverse complement, folded as a base-paired duplex. `modelSeeds: [1]`. Job name = gene name (spaces → underscores). AF3 lowercases the job name for its output dir: `FLI1` → `fli1/fli1_model.cif`.
 
 ### AF3 run log (resume on interruption)
 

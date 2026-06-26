@@ -38,12 +38,22 @@ AF3_OUTPUT_DIR = Path("af3_outputs")
 # JSON input construction
 # ---------------------------------------------------------------------------
 
+_DNA_COMPLEMENT = str.maketrans("ACGTN", "TGCAN")
+
+
+def _reverse_complement(dna_sequence: str) -> str:
+    """Return the reverse complement of a DNA sequence (A↔T, C↔G, N→N)."""
+    return dna_sequence.translate(_DNA_COMPLEMENT)[::-1]
+
+
 def _build_af3_json(job_name: str, protein_sequence: str, dna_sequence: str) -> dict:
     """
     Build an AF3 JSON input dict for a DBD–DNA complex.
 
-    Chain A = protein (DBD), chain B = DNA (single-stranded query sequence).
-    modelSeeds uses [1,2,3,4,5] for 5 models, matching AF3 defaults.
+    Chain A = protein (DBD). The DNA is double-stranded: chain B is the query
+    (sense) strand and chain C is its reverse complement (antisense), so AF3
+    folds them as a base-paired duplex.
+    modelSeeds uses [1] for a single model.
     """
     return {
         "name": job_name,
@@ -58,6 +68,12 @@ def _build_af3_json(job_name: str, protein_sequence: str, dna_sequence: str) -> 
                 "dna": {
                     "id": ["B"],
                     "sequence": dna_sequence,
+                }
+            },
+            {
+                "dna": {
+                    "id": ["C"],
+                    "sequence": _reverse_complement(dna_sequence),
                 }
             },
         ],
@@ -568,15 +584,15 @@ def _chai_api_key(online_cfg: dict[str, Any]) -> str:
     )
 
 
-def _chai_fasta(job_name: str, protein_sequence: str, dna_sequence: str) -> str:
+def _chai_fasta(job_name: str, protein_sequence: str, dna_sequences: list[str]) -> str:
     """
-    Build a FASTA string for Chai-1: protein chain A + DNA chain B.
+    Build a FASTA string for Chai-1: protein chain A + one DNA record per strand.
     Chai-1 uses sequence type tags in the FASTA header.
     """
-    return (
-        f">protein|name={job_name}_A\n{protein_sequence}\n"
-        f">dna|name={job_name}_B\n{dna_sequence}\n"
-    )
+    fasta = f">protein|name={job_name}_A\n{protein_sequence}\n"
+    for strand, dna_seq in zip("BC", dna_sequences):
+        fasta += f">dna|name={job_name}_{strand}\n{dna_seq}\n"
+    return fasta
 
 
 def _chai_submit(fasta: str, api_key: str) -> str | None:
@@ -672,15 +688,13 @@ def _run_online(
         protein_seq = next(
             (s["protein"]["sequence"] for s in seqs if "protein" in s), None
         )
-        dna_seq = next(
-            (s["dna"]["sequence"] for s in seqs if "dna" in s), None
-        )
-        if not protein_seq or not dna_seq:
+        dna_seqs = [s["dna"]["sequence"] for s in seqs if "dna" in s]
+        if not protein_seq or not dna_seqs:
             print(f"  SKIP {job_name}: could not extract sequences from JSON.", file=sys.stderr)
             results[job_name] = None
             continue
 
-        fasta = _chai_fasta(job_name, protein_seq, dna_seq)
+        fasta = _chai_fasta(job_name, protein_seq, dna_seqs)
 
         print(f"  [online] Submitting {job_name} to Chai-1...", file=sys.stderr)
         job_id = _chai_submit(fasta, api_key)
