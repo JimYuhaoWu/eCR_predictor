@@ -38,7 +38,7 @@ def build_result_table(
 
     cols = _OUTPUT_COLUMNS.copy()
     if include_sequence:
-        cols = cols + ["sequence_aa"]
+        cols = cols + ["sequence_aa", "zinc_finger_count"]
 
     # Ensure all output columns exist
     for col in cols:

@@ -68,6 +68,7 @@ python cli.py \
 | `annotation_confidence` | `high` / `medium` / `low` derived from `validation_level` |
 | `jaspar_id` | JASPAR motif ID if available |
 | `sequence_aa` | DBD amino acid sequence (only with `--include-sequence`) |
+| `zinc_finger_count` | UniProt-annotated zinc-finger count for C2H2 DBDs (only with `--include-sequence`); drives Zn ions in AF3 |
 
 Results are sorted: exact species matches first, then by `motif_score` descending (`NA` last).
 
@@ -125,6 +126,8 @@ Predicts DBD–DNA complex structures for the top-N FIMO-validated hits. Three b
 | `local` | Running `refine.py` interactively on the HPCC (AF3 installed there) |
 | `hpcc` | Submitting from a separate Linux server to the HPCC via SSH |
 | `online` | [Chai-1 API](https://chaidiscovery.com) — sign up for an API key |
+
+DNA is modelled as a double-stranded duplex (query strand + auto-generated reverse complement). For C2H2-type zinc-finger DBDs (`tf_family` ∈ `zf-C2H2`, `ZBTB`), one Zn²⁺ ion is added per UniProt-annotated finger (`zinc_finger_count`) to improve accuracy.
 
 Adds column: `af3_cif_path`.
 

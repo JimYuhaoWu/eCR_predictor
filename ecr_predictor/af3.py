@@ -46,40 +46,81 @@ def _reverse_complement(dna_sequence: str) -> str:
     return dna_sequence.translate(_DNA_COMPLEMENT)[::-1]
 
 
-def _build_af3_json(job_name: str, protein_sequence: str, dna_sequence: str) -> dict:
+# C2H2-type zinc-finger families (tf_family / library subtype) that coordinate
+# one Zn(2+) ion per finger. AF3 accuracy improves when these ions are supplied.
+ZINC_FINGER_FAMILIES = {"zf-C2H2", "ZBTB"}
+
+
+def _zinc_ion_ids(n: int) -> list[str]:
+    """
+    Generate n distinct chain IDs for Zn ions: ZA, ZB, … ZZ, ZAA, ZAB, …
+    Prefixed with 'Z' to avoid colliding with protein (A) and DNA (B, C) chains.
+    """
+    import string
+    letters = string.ascii_uppercase
+    ids = []
+    for i in range(n):
+        if i < 26:
+            ids.append(f"Z{letters[i]}")
+        else:
+            ids.append(f"Z{letters[i // 26 - 1]}{letters[i % 26]}")
+    return ids
+
+
+def _build_af3_json(
+    job_name: str,
+    protein_sequence: str,
+    dna_sequence: str,
+    zinc_count: int = 0,
+) -> dict:
     """
     Build an AF3 JSON input dict for a DBD–DNA complex.
 
     Chain A = protein (DBD). The DNA is double-stranded: chain B is the query
     (sense) strand and chain C is its reverse complement (antisense), so AF3
     folds them as a base-paired duplex.
+
+    If zinc_count > 0 (C2H2-type zinc-finger DBDs), that many Zn(2+) ions are
+    added as a single ligand entity — one ion per finger — matching the
+    UniProt-annotated zinc_finger_count. AF3 places them without bond
+    constraints.
     modelSeeds uses [1] for a single model.
     """
+    sequences: list[dict] = [
+        {
+            "protein": {
+                "id": ["A"],
+                "sequence": protein_sequence,
+            }
+        },
+        {
+            "dna": {
+                "id": ["B"],
+                "sequence": dna_sequence,
+            }
+        },
+        {
+            "dna": {
+                "id": ["C"],
+                "sequence": _reverse_complement(dna_sequence),
+            }
+        },
+    ]
+
+    if zinc_count > 0:
+        sequences.append({
+            "ligand": {
+                "id": _zinc_ion_ids(zinc_count),
+                "ccdCodes": ["ZN"],
+            }
+        })
+
     return {
         "name": job_name,
-        "sequences": [
-            {
-                "protein": {
-                    "id": ["A"],
-                    "sequence": protein_sequence,
-                }
-            },
-            {
-                "dna": {
-                    "id": ["B"],
-                    "sequence": dna_sequence,
-                }
-            },
-            {
-                "dna": {
-                    "id": ["C"],
-                    "sequence": _reverse_complement(dna_sequence),
-                }
-            },
-        ],
+        "sequences": sequences,
         "modelSeeds": [1],
         "dialect": "alphafold3",
-        "version": 1,
+        "version": 2,
     }
 
 
@@ -115,12 +156,19 @@ def _write_job_jsons(
             print(f"  SKIP {gene}: no sequence_aa (re-run cli.py with --include-sequence).", file=sys.stderr)
             continue
 
+        # Add Zn ions for C2H2-type zinc-finger DBDs (one per UniProt-annotated finger)
+        zinc_count = 0
+        family = str(row.get("tf_family", "")).strip()
+        if family in ZINC_FINGER_FAMILIES:
+            zinc_count = int(pd.to_numeric(row.get("zinc_finger_count"), errors="coerce") or 0)
+
         job_name = gene.replace(" ", "_")
-        job_input = _build_af3_json(job_name, str(protein_seq), dna_sequence)
+        job_input = _build_af3_json(job_name, str(protein_seq), dna_sequence, zinc_count)
         json_path = job_dir / f"{job_name}.json"
         json_path.write_text(json.dumps(job_input, indent=2), encoding="utf-8")
         jobs.append((job_name, json_path))
-        print(f"  Wrote {json_path.name}", file=sys.stderr)
+        zinc_note = f" (+{zinc_count} Zn)" if zinc_count else ""
+        print(f"  Wrote {json_path.name}{zinc_note}", file=sys.stderr)
 
     return jobs
 
