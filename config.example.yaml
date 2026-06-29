@@ -64,3 +64,105 @@ af3:
   # Or paste the key below (do not commit config.yaml with a real key).
   online:
     api_key: ""   # Chai-1 API key (prefer env var ECR_CHAI_API_KEY)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fusion-design stage (Step 3 — fuse.py)
+# ─────────────────────────────────────────────────────────────────────────────
+# Assembles DBD + linker + ED candidates and screens them for developability
+# liabilities before wet-lab synthesis. Target modality: INTRACELLULAR expression
+# (viral vector / mRNA), so MHC-I junction neoepitopes are the primary concern.
+#
+# Each external tool is invoked through a local-CLI-or-API backend, exactly like
+# the AF3 stage. Per tool:  backend: local | api | disabled
+fusion:
+  # Domain order in the fusion: dbd_n (DBD at N-terminus) | ed_n
+  orientation: dbd_n
+
+  # Linker library to enumerate (every linker is tried against every DBD×ED).
+  linkers:
+    - name: GS-flex
+      sequence: GGGGSGGGGS        # flexible; Gly/Ser poorly presented by MHC-I
+    - name: EAAAK-rigid
+      sequence: EAAAKEAAAK        # rigid α-helical; charged
+    - name: XTEN16
+      sequence: SGSETPGTSESATPES  # unstructured, low-immunogenicity scaffold
+
+  # Effector domains (EDs) are read from the eCR_mod_lib library (type='ED'),
+  # NOT from this file. Subset them at the CLI with: fuse.py --ed VP64,KRAB
+
+  # Human proteome FASTA for self-tolerance filtering (strongly recommended).
+  # Junction peptides that occur verbatim in self are dropped before MHC-I scan.
+  self_proteome: ""               # e.g. /data/uniprot/UP000005640_9606.fasta
+
+  # Residues either side of a boundary still counted as "at the junction" (Gate 2).
+  junction_window: 5
+
+  tools:
+    # ── Gate 1: MHC-I junction neoepitope screen ─────────────────────────────
+    # Enable ONE MHC-I tool. netctlpan is preferred (models proteasomal cleavage
+    # + TAP + MHC-I); netmhcpan covers binding only.
+    netctlpan:
+      backend: disabled           # local | api | disabled
+      local:
+        command: netCTLpan
+        extra_args: ""
+        timeout: 600
+      api:
+        url: ""
+        api_key_env: ECR_NETCTLPAN_API_KEY
+        poll_interval: 10
+        timeout: 600
+      alleles: [HLA-A02:01, HLA-A01:01, HLA-A03:01, HLA-B07:02, HLA-B08:01]
+      peptide_lengths: [8, 9, 10, 11]
+      rank_threshold: 2.0         # %rank ≤ this is a flagged binder
+
+    netmhcpan:
+      backend: local              # fallback MHC-I tool (binding only)
+      local:
+        command: netMHCpan
+        extra_args: ""
+        timeout: 600
+      api:
+        url: ""
+        api_key_env: ECR_NETMHCPAN_API_KEY
+        poll_interval: 10
+        timeout: 600
+      alleles: [HLA-A02:01, HLA-A01:01, HLA-A03:01, HLA-B07:02, HLA-B08:01]
+      peptide_lengths: [8, 9, 10, 11]
+      rank_threshold: 2.0
+
+    # ── Gate 2: aggregation / solubility ─────────────────────────────────────
+    # Enable ONE. aggrescan3d needs the AF3 fusion structure (Gate 0); camsol is
+    # sequence-based.
+    aggrescan3d:
+      backend: disabled
+      local:
+        command: aggrescan3d
+        extra_args: ""
+        timeout: 600
+      api:
+        url: ""
+        api_key_env: ECR_A3D_API_KEY
+      hotspot_cutoff: 0.0         # per-residue score above this = hotspot
+
+    camsol:
+      backend: disabled
+      local:
+        command: camsol
+        extra_args: ""
+        timeout: 600
+      api:
+        url: ""
+        api_key_env: ECR_CAMSOL_API_KEY
+      hotspot_cutoff: -1.0        # CamSol: lower = less soluble
+
+    # ── Gate 3: intracellular stability (optional ubiquitination predictor) ──
+    # N-end-rule and degron scans always run (no tool needed). UbPred is optional.
+    ubpred:
+      backend: disabled
+      local:
+        command: ubpred
+        extra_args: ""
+        timeout: 300
+      score_threshold: 0.6

@@ -10,9 +10,10 @@
 
 ## What this project does
 
-Two-stage CLI pipeline:
+Three-stage CLI pipeline:
 1. **`cli.py`** — predicts which DBDs from `eCR_mod_lib` are likely to bind a query DNA sequence. Returns a ranked TSV with two independent confidence scores.
 2. **`refine.py`** — filters, FIMO-validates, runs AF3 structure prediction, and estimates binding affinity with FoldX.
+3. **`fuse.py`** — assembles DBD + linker + ED fusion candidates and screens them for developability liabilities (MHC-I junction immunogenicity, aggregation, stability) before wet-lab synthesis. Target modality: intracellular expression (viral vector / mRNA).
 
 ## Repo layout
 
@@ -27,7 +28,15 @@ ECR_predictor/
 │   ├── filter.py         # drop low-confidence hits (annotation + motif_score)
 │   ├── fimo.py           # FIMO motif validation (requires MEME Suite)
 │   ├── af3.py            # AF3 structure prediction (local / hpcc / online backends)
-│   ├── foldx.py          # FoldX binding affinity estimation (stub — see TODOs)
+│   ├── foldx.py          # FoldX binding affinity estimation
+│   ├── fusion/           # Step 3 fusion-design developability gates
+│   │   ├── backends.py       # shared local-CLI-or-API tool dispatch
+│   │   ├── assemble.py       # build DBD+linker+ED candidates, track junctions
+│   │   ├── junction.py       # junction-peptide enumeration + self-filtering
+│   │   ├── immunogenicity.py # Gate 1: MHC-I neoepitope screen
+│   │   ├── aggregation.py    # Gate 2: AGGRESCAN3D / CamSol
+│   │   ├── stability.py      # Gate 3: N-end rule / degron / UbPred
+│   │   └── score.py          # composite risk + Pareto ranking
 │   └── config.py         # load/validate config.yaml
 ├── jaspar_cache/          # .jaspar files after prefetch (gitignored)
 ├── af3_outputs/           # AF3 JSON inputs, CIF outputs, run_log.json (gitignored)
@@ -37,6 +46,7 @@ ECR_predictor/
 │       └── run_log.json      # job state log for resume on interruption
 ├── cli.py                 # Step 1 entrypoint
 ├── refine.py              # Step 2 entrypoint
+├── fuse.py                # Step 3 entrypoint (fusion-design developability)
 ├── config.example.yaml    # config template — copy to config.yaml and edit
 ├── environment.yml        # shared conda environment (covers both repos)
 ├── server_setup.sh        # one-time server setup (install + seed DB + prefetch)
@@ -222,6 +232,62 @@ af3:
 - Removes residues from both termini until reaching the confidence threshold.
 - Set `confidence_threshold=None` in code to disable trimming.
 - Configurable via `refine.py` parameters (future: add CLI flags if needed).
+
+## Fusion-design stage (fuse.py — Step 3)
+
+Separate entrypoint (not a `refine.py` stage) because the input model differs:
+it operates on **fusion candidates** (DBD + linker + ED), not DBD–DNA hits.
+DBDs come from a TSV (`gene_name` + `sequence_aa`); **EDs come from the library**
+(`query.load_eds()`, `type='ED'`); linkers come from the `fusion:` config section.
+Stages: `assemble → sequence → prune → structure → score` (`--stop-after <stage>`).
+
+**Ordering is load-bearing:** the cheap SEQUENCE gates (immunogenicity, stability)
+run on the whole library, then `prune` keeps the Pareto-optimal survivors
+(capped by `--top-n-structure`), and only then does the STRUCTURE phase spend
+HPCC/GPU (AF3 + FoldX) on survivors. Never fold the full DBD×linker×ED product.
+
+**Target modality is intracellular expression** (viral vector / mRNA). This is
+the other load-bearing assumption: the dominant immune liability is MHC-I
+presentation of junction neoepitopes → CD8 killing of transduced cells.
+Antibody/B-cell and serum-protease screening are deliberately omitted.
+
+### Tool backend abstraction
+Each external tool is configured under `fusion.tools.<tool>` with
+`backend: local | api | disabled`, mirroring AF3. `fusion/backends.py` provides
+the shared plumbing: `resolve_backend()`, `run_cli()` (local binary; `{key}`
+tokens in args map to temp input files), and `submit_and_poll()` (generic
+API submit/poll with caller-supplied id/status/result callbacks). Gate modules
+build tool-specific commands/payloads and parse tool-specific output.
+
+### Gates
+- **Function retention** — not a separate gate; the structure phase
+  (`fusion/structure.py`) reuses `af3.run_af3_prediction` + `foldx.run_foldx_affinity`
+  on the *fused* construct (distinct from the bare DBD–DNA complex `refine.py`
+  folds). Reports `fusion_ddg_kcal_mol` and, when the input TSV carries a per-DBD
+  `foldx_ddg_kcal_mol` baseline, `function_delta_ddg`. Zinc-finger handling is
+  preserved by propagating the DBD's `tf_family`/`zinc_finger_count` into the AF3
+  input. Reported, not a Pareto axis (absolute ΔΔG isn't comparable across DBDs).
+- **Gate 1 immunogenicity** — `junction_peptides()` enumerates k-mers (8–11) that
+  straddle a domain boundary; `partition_self()` drops any matching the
+  `self_proteome` FASTA (exact substring). Remaining peptides go to NetCTLpan
+  (preferred — models proteasome+TAP+MHC) or NetMHCpan (binding only) across an
+  HLA-I panel. Flag by `%rank ≤ rank_threshold` (default 2.0); report epitope
+  **density** (flagged/tested), not single hits.
+- **Gate 2 aggregation** — AGGRESCAN3D (needs Gate-0 structure) or CamSol; flags
+  hotspots within `junction_window` residues of a boundary.
+- **Gate 3 stability** — N-end-rule + degron regex scan run with NO external tool
+  (always available); UbPred optional via backend. NOTE: degradation feeds Gate-1
+  presentation — the two axes conflict; the pipeline surfaces both, doesn't resolve.
+- **Score** — `score.py` reports each liability axis and marks the **Pareto-optimal**
+  set; `risk_score` (normalized axis sum) is a convenience sort only.
+
+### Parsers are version-sensitive
+The NetMHCpan/NetCTLpan/AGGRESCAN3D/CamSol stdout parsers target specific tool
+versions (NetMHCpan 4.1, NetCTLpan 1.1) and locate columns by header name. They
+are the most likely thing to break against a different install — validate output
+parsing before trusting scores. The tool-independent logic (assembly, junction
+enumeration, self-filtering, N-end rule, degron scan, Pareto) is unit-testable
+without any external binary.
 
 ## Key implementation notes
 

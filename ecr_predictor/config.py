@@ -41,3 +41,14 @@ def get_af3_config(cfg: dict[str, Any]) -> dict[str, Any]:
     af3 = cfg.get("af3", {})
     af3.setdefault("backend", "hpcc")
     return af3
+
+
+def get_fusion_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Return the fusion section of the config, with safe defaults."""
+    fusion = cfg.get("fusion", {})
+    fusion.setdefault("orientation", "dbd_n")
+    fusion.setdefault("linkers", [])
+    fusion.setdefault("self_proteome", "")
+    fusion.setdefault("junction_window", 5)
+    fusion.setdefault("tools", {})
+    return fusion

@@ -18,6 +18,15 @@ def load_dbds(db_path: Path = _DB_PATH) -> pd.DataFrame:
         return lib.to_dataframe("DBD")
 
 
+def load_eds(db_path: Path = _DB_PATH) -> pd.DataFrame:
+    """Return all effector-domain (ED) rows from the library as a DataFrame.
+
+    EDs recruit chromatin regulators (CRs); they are the fusion partners for
+    DBDs in the Step-3 fusion-design stage (fuse.py)."""
+    with ModuleLibrary(db_path) as lib:
+        return lib.to_dataframe("ED")
+
+
 def match_species(dbds: pd.DataFrame, species: str) -> pd.DataFrame:
     """
     Filter DBDs by species with fuzzy taxonomic fallback.

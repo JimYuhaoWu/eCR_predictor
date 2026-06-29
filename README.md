@@ -149,6 +149,71 @@ Adds column: `foldx_ddg_kcal_mol` in kcal/mol (lower = stronger predicted bindin
 
 ---
 
+## Step 3 — Fuse (fusion-design developability screen)
+
+Once you've selected DBDs (Steps 1–2), `fuse.py` assembles **fusion candidates** (DBD + linker + effector domain) and screens each for liabilities that would sink a wet-lab synthesis. The **target modality is intracellular expression** (viral vector / mRNA), so the dominant immune risk is presentation of *junction-spanning neoepitopes* on **MHC class I** → CD8 killing of transduced cells. Antibody / serum-protease routes are not screened (the product isn't circulating).
+
+```bash
+python fuse.py \
+  --dbd-input predictions.tsv \
+  --sequence ACAGGAAGTGACAGGAAGTGACAGGAAGTG \
+  --config config.yaml \
+  --output fusion_candidates.tsv
+```
+
+DBDs are read from the `gene_name` + `sequence_aa` columns of the Step-1/2 output (use `--dbd FLI1,ETV6` to subset). **Effector domains are read from the eCR_mod_lib library** (`type='ED'`; use `--ed VP64,KRAB` to subset). The linker library and tool backends come from the `fusion:` section of `config.yaml`. `--sequence` is the DNA target the DBD must still bind (only needed for the structure phase).
+
+### Pipeline
+
+The pipeline runs **cheap sequence-based gates first**, prunes to the best candidates, and only then spends HPCC/GPU on the structure phase — so AF3 folding never runs on the full combinatorial library:
+
+```
+[1] Assemble → [2] Sequence gates → [3] Prune → [4] Structure → [5] Score
+                (immuno + stability)  (Pareto)   (AF3 + FoldX + aggregation)
+```
+
+| Stage | Tool(s) | What it checks | Cost |
+|---|---|---|---|
+| Assemble | — | DBDs × linkers × EDs; tracks each domain junction | — |
+| Immunogenicity (Gate 1) | NetCTLpan / NetMHCpan | MHC-I binders among junction-spanning peptides | sequence |
+| Stability (Gate 3) | N-end rule, degron scan, *UbPred* | proteasomal degradation liabilities | sequence |
+| Prune | — | Pareto over the sequence axes → survivors (`--top-n-structure`) | — |
+| Function + Aggregation | AF3, FoldX, AGGRESCAN3D / CamSol | DBD–DNA binding retained; junction aggregation | **HPCC/GPU** |
+| Score | — | per-axis liabilities + Pareto-optimal flag | — |
+
+**Function retention** is not a separate gate — it reuses the AF3 + FoldX stages on the *fused* construct (a different molecule from the bare DBD–DNA complex that `refine.py` folds). The fusion's FoldX ΔΔG, compared against a per-DBD baseline ΔΔG if present in the input TSV (`function_delta_ddg`), tells you whether fusing perturbed binding. A low-liability but non-functional fusion is useless, so this runs on the survivors before you trust the ranking.
+
+Use `--stop-after prune` to get the sequence-only ranking without any HPCC work.
+
+### Tool backends (local CLI or API)
+
+Every external tool is invoked through a **local-CLI-or-API backend**, selected per tool in `config.yaml` exactly like the AF3 stage:
+
+```yaml
+fusion:
+  tools:
+    netmhcpan:
+      backend: local        # local | api | disabled
+      local: { command: netMHCpan }
+      api:   { url: "", api_key_env: ECR_NETMHCPAN_API_KEY }
+```
+
+A gate whose tool is `disabled` (or whose binary is missing) is skipped gracefully and its axis is reported as `NA`. The **N-end-rule and degron scans in Gate 3 need no external tool** and always run.
+
+### Key design points
+
+- **Sequence-first ordering.** Cheap gates prune the library before any AF3/FoldX run, so the expensive structure phase only ever sees `--top-n-structure` survivors.
+- **Self-tolerance filtering.** Because both domains are endogenous, only junction-spanning peptides are potential neoepitopes — and any that occur verbatim in the human proteome are still self. Provide `fusion.self_proteome` (a proteome FASTA) to subtract them before the MHC-I scan.
+- **%rank, not raw IC₅₀.** Binders are flagged by `%rank ≤ rank_threshold` (default 2.0) across an HLA-I panel; the gate reports **epitope density** (flagged / tested), not single hits.
+- **Pareto over composite.** The output marks the Pareto-optimal set across the liability axes rather than collapsing them into one opaque score (a `risk_score` is also provided for quick sorting).
+- **Degradation ↔ presentation tension.** Proteasomal degradation (Gate 3) is what *generates* MHC-I peptides (Gate 1); the pipeline surfaces both and does not auto-resolve the trade-off.
+
+### Output columns
+
+`candidate`, `dbd`, `linker`, `ed`, `length`, `immuno_density`, `immuno_flagged`, `immuno_min_rank`, `aggregation_risk`, `stability_risk`, `fusion_ddg_kcal_mol`, `function_delta_ddg`, `af3_cif_path`, `risk_score`, `pareto_optimal`.
+
+---
+
 ## Configuration (config.yaml)
 
 `config.yaml` is gitignored (it contains credentials). Copy the template and edit:
