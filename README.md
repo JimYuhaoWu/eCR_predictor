@@ -200,6 +200,75 @@ fusion:
 
 A gate whose tool is `disabled` (or whose binary is missing) is skipped gracefully and its axis is reported as `NA`. The **N-end-rule and degron scans in Gate 3 need no external tool** and always run.
 
+### Installing the fusion tools
+
+None of these ship with the conda environment — install only the ones for the gates you intend to run. The structure phase additionally needs **FoldX** (same binary as Stage 4) and AF3 access.
+
+| Tool | Gate | Licence | Install |
+|---|---|---|---|
+| **AGGRESCAN3D** | Gate 2 (aggregation) | open | `pip install aggrescan3d freesasa` |
+| **NetMHCpan 4.1** | Gate 1 (MHC-I) | free academic | [DTU download](https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/) → tarball |
+| **NetCTLpan 1.1** | Gate 1 (preferred) | free academic | [DTU download](https://services.healthtech.dtu.dk/services/NetCTLpan-1.1/) → tarball |
+| **FoldX 5** | structure phase | free academic | [foldxsuite.crg.eu](https://foldxsuite.crg.eu/) → tarball |
+| **CamSol** | Gate 2 (alt) | web server | no CLI — use AGGRESCAN3D, or the `api` backend |
+| **UbPred** | Gate 3 (optional) | web server | no CLI — Gate 3 runs without it |
+
+#### Local install (helper script)
+
+`install_fusion_tools.sh` automates the whole thing. It `pip`-installs AGGRESCAN3D, and for the licence-gated tools (NetMHCpan, NetCTLpan, FoldX) you first **register and download the tarballs** from the links above and drop them into a `vendor/` directory — the script then extracts them, patches the tcsh wrappers (`NMHOME` / `NETCTLpan` + `TMPDIR`), fetches NetMHCpan's data files, and symlinks the binaries into one bin dir. It's idempotent and skips any tool whose tarball isn't present, so you can re-run it as you obtain each licence.
+
+```bash
+conda activate ecr
+mkdir vendor                       # drop the downloaded *.tar.gz files here
+bash install_fusion_tools.sh       # installs into ~/opt/ecr_tools by default
+
+# override locations if you like:
+VENDOR_DIR=/data/tarballs INSTALL_DIR=/opt/ecr_tools bash install_fusion_tools.sh
+```
+
+Then follow the printed summary — add the bin dir to `PATH`, export `FOLDX_PATH`, and enable the installed tools in `config.yaml`:
+
+```bash
+export PATH="$HOME/opt/ecr_tools/bin:$PATH"
+export FOLDX_PATH="$HOME/opt/ecr_tools/bin/foldx"
+```
+
+```yaml
+fusion:
+  tools:
+    netctlpan:   { backend: local, local: { command: netCTLpan } }   # one MHC-I tool
+    aggrescan3d: { backend: local, local: { command: aggrescan3d } }  # one aggregation tool
+    # leave camsol / ubpred as 'disabled'
+```
+
+#### Using API backends instead
+
+If you'd rather not install the binaries, set a tool's `backend: api` and point it at an HTTP endpoint — the same submit → poll → fetch flow the AF3 `online` backend uses. Supply the URL in `config.yaml` and the key via the named env var (never commit a real key):
+
+```yaml
+fusion:
+  tools:
+    netmhcpan:
+      backend: api
+      api:
+        url: https://your-mhc-service.example/api/v1/predict
+        api_key_env: ECR_NETMHCPAN_API_KEY   # read from this env var
+        poll_interval: 10                     # seconds between status polls
+        timeout: 600                          # give up after this many seconds
+    aggrescan3d:
+      backend: api
+      api:
+        url: https://your-a3d-service.example/api/v1/predict
+        api_key_env: ECR_A3D_API_KEY
+```
+
+```bash
+export ECR_NETMHCPAN_API_KEY='your_key'
+export ECR_A3D_API_KEY='your_key'
+```
+
+The client POSTs the job payload to `url`, then polls `url/<job_id>` until the status reaches a done/fail state. The expected response shapes are: for MHC-I tools, `{ "peptide": rank, ... }` or a list of `{peptide, rank}` records; for aggregation tools, a per-residue `[{index, score}, ...]` list. DTU and CamSol do not publish such a REST API themselves — the `api` backend is for a service you host or wrap. A key set in the env var always overrides one written in `config.yaml`.
+
 ### Key design points
 
 - **Sequence-first ordering.** Cheap gates prune the library before any AF3/FoldX run, so the expensive structure phase only ever sees `--top-n-structure` survivors.
