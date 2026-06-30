@@ -34,7 +34,7 @@ ECR_predictor/
 │   │   ├── assemble.py       # build DBD+linker+ED candidates, track junctions
 │   │   ├── junction.py       # junction-peptide enumeration + self-filtering
 │   │   ├── immunogenicity.py # Gate 1: MHC-I neoepitope screen
-│   │   ├── aggregation.py    # Gate 2: AGGRESCAN3D / CamSol
+│   │   ├── aggregation.py    # Gate 2: built-in AGGRESCAN scorer (a3v + freesasa) / CamSol via api
 │   │   ├── stability.py      # Gate 3: N-end rule / degron / UbPred
 │   │   └── score.py          # composite risk + Pareto ranking
 │   └── config.py         # load/validate config.yaml
@@ -273,8 +273,11 @@ build tool-specific commands/payloads and parse tool-specific output.
   (binding by %rank; NetCTLpan — proteasome+TAP+MHC — is discontinued/legacy) across an
   HLA-I panel. Flag by `%rank ≤ rank_threshold` (default 2.0); report epitope
   **density** (flagged/tested), not single hits.
-- **Gate 2 aggregation** — AGGRESCAN3D (needs Gate-0 structure) or CamSol; flags
-  hotspots within `junction_window` residues of a boundary.
+- **Gate 2 aggregation** — built-in AGGRESCAN-style scorer (`local` backend, no
+  external binary): published a3v scale + length-adaptive window, weighted by
+  per-residue relative SASA (`freesasa`) from the AF3 survivor structure; pure
+  sequence fallback if no structure/freesasa. CamSol is web-only (`api` backend
+  only). Flags hotspots within `junction_window` residues of a boundary.
 - **Gate 3 stability** — N-end-rule + degron regex scan run with NO external tool
   (always available); UbPred optional via backend. NOTE: degradation feeds Gate-1
   presentation — the two axes conflict; the pipeline surfaces both, doesn't resolve.
@@ -282,10 +285,11 @@ build tool-specific commands/payloads and parse tool-specific output.
   set; `risk_score` (normalized axis sum) is a convenience sort only.
 
 ### Parsers are version-sensitive
-The NetMHCpan/NetCTLpan/AGGRESCAN3D/CamSol stdout parsers target specific tool
-versions (NetMHCpan 4.2, NetCTLpan 1.1) and locate columns by header name. They
-are the most likely thing to break against a different install — validate output
-parsing before trusting scores. The tool-independent logic (assembly, junction
+The NetMHCpan/NetCTLpan stdout parsers target specific tool versions (NetMHCpan
+4.2, NetCTLpan 1.1) and locate columns by header name. They are the most likely
+thing to break against a different install — validate output parsing before
+trusting scores. (Gate 2 aggregation no longer parses external stdout — it's the
+built-in a3v + freesasa scorer.) The tool-independent logic (assembly, junction
 enumeration, self-filtering, N-end rule, degron scan, Pareto) is unit-testable
 without any external binary.
 

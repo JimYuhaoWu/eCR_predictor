@@ -178,7 +178,7 @@ The pipeline runs **cheap sequence-based gates first**, prunes to the best candi
 | Immunogenicity (Gate 1) | NetMHCpan (NetCTLpan deprecated) | MHC-I binders among junction-spanning peptides | sequence |
 | Stability (Gate 3) | N-end rule, degron scan, *UbPred* | proteasomal degradation liabilities | sequence |
 | Prune | — | Pareto over the sequence axes → survivors (`--top-n-structure`) | — |
-| Function + Aggregation | AF3, FoldX, AGGRESCAN3D / CamSol | DBD–DNA binding retained; junction aggregation | **HPCC/GPU** |
+| Function + Aggregation | AF3, FoldX, built-in AGGRESCAN-style scorer | DBD–DNA binding retained; junction aggregation | **HPCC/GPU** |
 | Score | — | per-axis liabilities + Pareto-optimal flag | — |
 
 **Function retention** is not a separate gate — it reuses the AF3 + FoldX stages on the *fused* construct (a different molecule from the bare DBD–DNA complex that `refine.py` folds). The fusion's FoldX ΔΔG, compared against a per-DBD baseline ΔΔG if present in the input TSV (`function_delta_ddg`), tells you whether fusing perturbed binding. A low-liability but non-functional fusion is useless, so this runs on the survivors before you trust the ranking.
@@ -206,16 +206,16 @@ None of these ship with the conda environment — install only the ones for the 
 
 | Tool | Gate | Licence | Install |
 |---|---|---|---|
-| **AGGRESCAN3D** | Gate 2 (aggregation) | open | `pip install aggrescan3d freesasa` |
+| **AGGRESCAN scorer** (built-in) | Gate 2 (aggregation) | open | none — uses `freesasa` (already in `environment.yml`) |
 | **NetMHCpan 4.2** | Gate 1 (MHC-I) | free academic | [DTU download](https://services.healthtech.dtu.dk/services/NetMHCpan-4.2/) → tarball |
 | **NetCTLpan 1.1** | Gate 1 (deprecated) | free academic | discontinued by DTU — superseded by NetMHCpan; legacy installs only |
 | **FoldX 5** | structure phase | free academic | [foldxsuite.crg.eu](https://foldxsuite.crg.eu/) → tarball |
-| **CamSol** | Gate 2 (alt) | web server | no CLI — use AGGRESCAN3D, or the `api` backend |
+| **CamSol** | Gate 2 (alt) | web server | no CLI — use the built-in scorer, or the `api` backend |
 | **UbPred** | Gate 3 (optional) | web server | no CLI — Gate 3 runs without it |
 
 #### Local install (helper script)
 
-`install_fusion_tools.sh` automates the whole thing. It `pip`-installs AGGRESCAN3D, and for the licence-gated tools (**NetMHCpan 4.2** and **FoldX**) you first **register and download the tarballs** from the links above and drop them into a `vendor/` directory — the script then extracts them, patches the NetMHCpan tcsh wrapper (`NMHOME` + `TMPDIR`), fetches NetMHCpan's data files, and symlinks the binaries into one bin dir. It's idempotent and skips any tool whose tarball isn't present, so you can re-run it as you obtain each licence. (NetCTLpan is discontinued by DTU; if you still have a legacy `netCTLpan-*` tarball in `vendor/`, the script will configure it too, but new setups should use NetMHCpan.)
+`install_fusion_tools.sh` automates the licence-gated tools. (Gate 2 aggregation needs no install — it's the built-in AGGRESCAN-style scorer, which only uses `freesasa` from `environment.yml`.) For the licence-gated tools (**NetMHCpan 4.2** and **FoldX**) you first **register and download the tarballs** from the links above and drop them into a `vendor/` directory — the script then extracts them, patches the NetMHCpan tcsh wrapper (`NMHOME` + `TMPDIR`), fetches NetMHCpan's data files, and symlinks the binaries into one bin dir. It's idempotent and skips any tool whose tarball isn't present, so you can re-run it as you obtain each licence. (NetCTLpan is discontinued by DTU; if you still have a legacy `netCTLpan-*` tarball in `vendor/`, the script will configure it too, but new setups should use NetMHCpan.)
 
 ```bash
 conda activate ecr
@@ -237,7 +237,7 @@ export FOLDX_PATH="$HOME/opt/ecr_tools/bin/foldx"
 fusion:
   tools:
     netmhcpan:   { backend: local, local: { command: netMHCpan } }   # one MHC-I tool (NetMHCpan 4.2)
-    aggrescan3d: { backend: local, local: { command: aggrescan3d } }  # one aggregation tool
+    aggrescan3d: { backend: local }                                  # built-in scorer (freesasa)
     # leave camsol / ubpred as 'disabled'
 ```
 

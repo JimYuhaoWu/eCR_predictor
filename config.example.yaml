@@ -134,29 +134,24 @@ fusion:
       rank_threshold: 2.0
 
     # ── Gate 2: aggregation / solubility ─────────────────────────────────────
-    # Enable ONE. aggrescan3d needs the AF3 fusion structure (Gate 0); camsol is
-    # sequence-based.
+    # Enable ONE. 'aggrescan3d' local backend is a BUILT-IN AGGRESCAN-style scorer
+    # (no external binary): the published a3v scale, length-adaptive window, and —
+    # when the AF3 survivor structure is available — per-residue solvent exposure
+    # via freesasa (in the conda env). Sequence-only fallback if no structure.
     aggrescan3d:
-      backend: disabled
-      local:
-        command: aggrescan3d
-        extra_args: ""
-        timeout: 600
-      api:
+      backend: local             # local (built-in) | api | disabled
+      api:                       # optional remote per-residue service
         url: ""
         api_key_env: ECR_A3D_API_KEY
-      hotspot_cutoff: 0.0         # per-residue score above this = hotspot
+      hotspot_cutoff: 0.0        # per-residue score above this = hotspot (a3v HST ~ -0.02)
 
+    # CamSol is web-only (no CLI) — usable here only via the 'api' backend.
     camsol:
       backend: disabled
-      local:
-        command: camsol
-        extra_args: ""
-        timeout: 600
       api:
         url: ""
         api_key_env: ECR_CAMSOL_API_KEY
-      hotspot_cutoff: -1.0        # CamSol: lower = less soluble
+      hotspot_cutoff: -1.0       # CamSol: lower = less soluble
 
     # ── Gate 3: intracellular stability (optional ubiquitination predictor) ──
     # N-end-rule and degron scans always run (no tool needed). UbPred is optional.

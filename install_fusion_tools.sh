@@ -85,15 +85,17 @@ if ! have tcsh; then
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# AGGRESCAN3D (Gate 2) — pip, fully automated
+# Gate 2 (aggregation) — built-in, nothing to install here
 # ════════════════════════════════════════════════════════════════════════════
-msg "AGGRESCAN3D (Gate 2 aggregation)"
-if have aggrescan3d; then
-    ok "aggrescan3d already on PATH ($(command -v aggrescan3d))"
+# Gate 2 uses the built-in AGGRESCAN-style scorer (ecr_predictor/fusion/
+# aggregation.py), which only needs `freesasa` — already declared in
+# environment.yml. The standalone AGGRESCAN3D is Python-2.7-only and is NOT used.
+msg "Gate 2 aggregation: built-in scorer (no install)"
+if python -c "import freesasa" 2>/dev/null; then
+    ok "freesasa importable — structure-weighted Gate 2 available"
 else
-    # freesasa is the SASA backend A3D needs; numpy/scipy come as deps.
-    pip install --quiet aggrescan3d freesasa && ok "aggrescan3d installed via pip" \
-        || warn "pip install aggrescan3d failed — check pip/conda env and retry."
+    warn "freesasa not importable in this env — Gate 2 will use the sequence-only"
+    warn "  fallback. Fix with: conda install -c conda-forge freesasa"
 fi
 echo
 
@@ -207,7 +209,7 @@ echo
 # ════════════════════════════════════════════════════════════════════════════
 # Web-only tools — reported, not installable
 # ════════════════════════════════════════════════════════════════════════════
-warn "CamSol — web server only (no CLI). Use AGGRESCAN3D for Gate 2, or set the"
+warn "CamSol — web server only (no CLI). Use the built-in Gate-2 scorer, or set the"
 warn "         camsol 'api' backend in config.yaml if you wrap the service yourself."
 warn "UbPred — web server only and OPTIONAL. Gate 3 (N-end rule + degron scan)"
 warn "         runs without it; leave fusion.tools.ubpred.backend: disabled."
@@ -225,17 +227,22 @@ echo "2. Point the refine/fusion stages at FoldX:"
 echo "     export FOLDX_PATH=\"$BIN_DIR/foldx\""
 fi
 echo
-echo "3. Enable the tools you installed in config.yaml (fusion.tools.<tool>.backend: local):"
+echo "3. Enable the tools in config.yaml (fusion.tools.<tool>.backend: local):"
 echo "     - one MHC-I tool   → netmhcpan (NetMHCpan 4.2; NetCTLpan is deprecated)"
-echo "     - one aggregation  → aggrescan3d"
+echo "     - aggregation      → aggrescan3d (built-in scorer; needs only freesasa)"
 echo "   Leave camsol / ubpred as 'disabled'."
 echo
 echo "4. Verify:"
-for t in aggrescan3d netMHCpan netCTLpan foldx; do
+for t in netMHCpan netCTLpan foldx; do
     if PATH="$BIN_DIR:$PATH" have "$t"; then
         printf "     \033[1;32m✓\033[0m %s\n" "$t"
     else
         printf "     \033[1;33m–\033[0m %s (not installed)\n" "$t"
     fi
 done
+if python -c "import freesasa" 2>/dev/null; then
+    printf "     \033[1;32m✓\033[0m freesasa (Gate 2 built-in scorer)\n"
+else
+    printf "     \033[1;33m–\033[0m freesasa (Gate 2 will use sequence-only fallback)\n"
+fi
 echo "════════════════════════════════════════════════════════════════════════"
