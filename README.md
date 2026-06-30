@@ -241,6 +241,8 @@ fusion:
     # leave camsol / ubpred as 'disabled'
 ```
 
+> **tcsh note:** the NetMHCpan/NetCTLpan wrapper scripts start with `#! /bin/tcsh`. If your `tcsh` is from conda (e.g. `~/miniconda3/envs/ecr/bin/tcsh`) rather than `/bin/tcsh`, the wrapper fails with `bad interpreter: /bin/tcsh`. The installer repoints the shebang automatically; if you unpacked manually, either `sudo apt-get install tcsh` (puts it at `/bin/tcsh`) or edit line 1 of the `netMHCpan` script to your tcsh path. Verify the install with the bundled self-test: `cd test && ../netMHCpan -p test.pep` should reproduce `test.pep.out`.
+
 #### Using API backends instead
 
 If you'd rather not install the binaries, set a tool's `backend: api` and point it at an HTTP endpoint — the same submit → poll → fetch flow the AF3 `online` backend uses. Supply the URL in `config.yaml` and the key via the named env var (never commit a real key):

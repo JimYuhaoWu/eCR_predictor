@@ -49,6 +49,17 @@ find_tarball() {
     printf '%s' "$f"
 }
 
+# DTU wrappers hard-code '#! /bin/tcsh'. If tcsh lives elsewhere (e.g. a conda
+# env) and /bin/tcsh is absent, repoint the shebang at the tcsh that's on PATH —
+# otherwise the wrapper dies with 'bad interpreter: /bin/tcsh'.
+patch_tcsh_shebang() {
+    local script="$1"
+    if [[ ! -x /bin/tcsh ]] && have tcsh; then
+        sed -i "1s|^#!.*|#! $(command -v tcsh) -f|" "$script"
+        msg "  shebang repointed: $(head -1 "$script")  (no /bin/tcsh on this host)"
+    fi
+}
+
 # ── Pre-flight checks ───────────────────────────────────────────────────────
 msg "vendor dir : $VENDOR_DIR  (drop licence-gated tarballs here)"
 msg "install dir: $INSTALL_DIR"
@@ -116,12 +127,19 @@ install_netmhcpan() {
         fi
     fi
 
-    # Patch the tcsh wrapper: NMHOME must point at the real install dir, TMPDIR writable.
+    # Patch the tcsh wrapper: NMHOME must point at the real install dir — the only
+    # mandatory edit (verified against the 4.2c wrapper, which has 'setenv NMHOME
+    # /tools/src/netMHCpan-4.2'). The wrapper self-defaults TMPDIR to /tmp when
+    # unset, so no TMPDIR patch is needed; export TMPDIR yourself if /tmp isn't
+    # writable on your host.
     sed -i.bak -E "s|^setenv[[:space:]]+NMHOME.*|setenv NMHOME $pkgdir|" "$pkgdir/netMHCpan"
-    sed -i     -E "s|^setenv[[:space:]]+TMPDIR.*|setenv TMPDIR $TMP_DIR|" "$pkgdir/netMHCpan"
+    patch_tcsh_shebang "$pkgdir/netMHCpan"
     chmod +x "$pkgdir/netMHCpan"
+    # The wrapper runs $NMHOME/<platform>/bin/netMHCpan-4.2 only if it is executable
+    # (-x check); ensure the platform binaries carry the exec bit after extraction.
+    chmod +x "$pkgdir"/Linux_*/bin/* 2>/dev/null || true
     ln -sf "$pkgdir/netMHCpan" "$BIN_DIR/netMHCpan"
-    ok "NetMHCpan wired → $BIN_DIR/netMHCpan"
+    ok "NetMHCpan wired → $BIN_DIR/netMHCpan (data bundled: $([[ -d "$pkgdir/data" ]] && echo yes || echo no))"
 }
 install_netmhcpan
 echo
@@ -147,7 +165,7 @@ install_netctlpan() {
 
     # NetCTLpan's wrapper sets NETCTLpan (install root) and TMPDIR.
     sed -i.bak -E "s|^setenv[[:space:]]+NETCTLpan.*|setenv NETCTLpan $pkgdir|" "$pkgdir/netCTLpan"
-    sed -i     -E "s|^setenv[[:space:]]+TMPDIR.*|setenv TMPDIR $TMP_DIR|" "$pkgdir/netCTLpan"
+    patch_tcsh_shebang "$pkgdir/netCTLpan"
     chmod +x "$pkgdir/netCTLpan"
     ln -sf "$pkgdir/netCTLpan" "$BIN_DIR/netCTLpan"
     ok "NetCTLpan wired → $BIN_DIR/netCTLpan"
