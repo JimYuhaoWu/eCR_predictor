@@ -269,8 +269,8 @@ build tool-specific commands/payloads and parse tool-specific output.
   input. Reported, not a Pareto axis (absolute ΔΔG isn't comparable across DBDs).
 - **Gate 1 immunogenicity** — `junction_peptides()` enumerates k-mers (8–11) that
   straddle a domain boundary; `partition_self()` drops any matching the
-  `self_proteome` FASTA (exact substring). Remaining peptides go to NetCTLpan
-  (preferred — models proteasome+TAP+MHC) or NetMHCpan (binding only) across an
+  `self_proteome` FASTA (exact substring). Remaining peptides go to NetMHCpan
+  (binding by %rank; NetCTLpan — proteasome+TAP+MHC — is discontinued/legacy) across an
   HLA-I panel. Flag by `%rank ≤ rank_threshold` (default 2.0); report epitope
   **density** (flagged/tested), not single hits.
 - **Gate 2 aggregation** — AGGRESCAN3D (needs Gate-0 structure) or CamSol; flags
@@ -283,7 +283,7 @@ build tool-specific commands/payloads and parse tool-specific output.
 
 ### Parsers are version-sensitive
 The NetMHCpan/NetCTLpan/AGGRESCAN3D/CamSol stdout parsers target specific tool
-versions (NetMHCpan 4.1, NetCTLpan 1.1) and locate columns by header name. They
+versions (NetMHCpan 4.2, NetCTLpan 1.1) and locate columns by header name. They
 are the most likely thing to break against a different install — validate output
 parsing before trusting scores. The tool-independent logic (assembly, junction
 enumeration, self-filtering, N-end rule, degron scan, Pareto) is unit-testable

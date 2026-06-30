@@ -5,8 +5,10 @@
 #
 # Tools and how they install:
 #   AGGRESCAN3D   Gate 2 (aggregation)  — free, pip-installable → fully automated here
-#   NetMHCpan 4.1 Gate 1 (MHC-I)        — DTU academic licence; you download the tarball,
-#   NetCTLpan 1.1 Gate 1 (preferred)      this script extracts + configures it
+#   NetMHCpan 4.2 Gate 1 (MHC-I)        — DTU academic licence; you download the tarball,
+#                                         this script extracts + configures it
+#   NetCTLpan 1.1 Gate 1 (DEPRECATED)   — discontinued by DTU (superseded by NetMHCpan);
+#                                         configured only if a legacy tarball is in vendor/
 #   FoldX 5       structure phase       — academic licence tarball; wired to FOLDX_PATH
 #   CamSol/UbPred Gate2 alt / Gate3 opt — web-server only, no CLI (reported, not installed)
 #
@@ -20,8 +22,9 @@
 #   VENDOR_DIR=/path/to/tarballs bash install_fusion_tools.sh
 #
 # Download pages (academic licence — free):
-#   NetMHCpan 4.1  https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/
-#   NetCTLpan 1.1  https://services.healthtech.dtu.dk/services/NetCTLpan-1.1/
+#   NetMHCpan 4.2  https://services.healthtech.dtu.dk/services/NetMHCpan-4.2/
+#                  (NetCTLpan 1.1 is discontinued by DTU; NetMHCpan supersedes it —
+#                   it covers MHC-I binding but not proteasomal cleavage/TAP)
 #   FoldX 5        https://foldxsuite.crg.eu/
 #
 set -euo pipefail
@@ -84,26 +87,27 @@ fi
 echo
 
 # ════════════════════════════════════════════════════════════════════════════
-# NetMHCpan 4.1 (Gate 1) — licence-gated tarball
+# NetMHCpan 4.2 (Gate 1) — licence-gated tarball
 # ════════════════════════════════════════════════════════════════════════════
 install_netmhcpan() {
     local tarball pkgdir
     tarball=$(find_tarball 'netMHCpan-*.Linux.tar.gz')
     [[ -z "$tarball" ]] && tarball=$(find_tarball 'netMHCpan-*.tar.gz')
     if [[ -z "$tarball" ]]; then
-        warn "NetMHCpan: no tarball in $VENDOR_DIR (expected netMHCpan-4.1b.Linux.tar.gz)."
-        warn "  Get it: https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/"
+        warn "NetMHCpan: no tarball in $VENDOR_DIR (expected netMHCpan-4.2c.Linux.tar.gz)."
+        warn "  Get it: https://services.healthtech.dtu.dk/services/NetMHCpan-4.2/"
         return
     fi
     msg "NetMHCpan: extracting $(basename "$tarball")"
     tar -xzf "$tarball" -C "$INSTALL_DIR"
     pkgdir=$(ls -d "$INSTALL_DIR"/netMHCpan-* 2>/dev/null | head -n1)
 
-    # Data files ship separately for 4.1; fetch if the package didn't include them.
+    # Data files may ship separately; fetch only if the package didn't include them
+    # (the 4.2c static build often bundles data, in which case this is skipped).
     if [[ ! -d "$pkgdir/data" ]]; then
-        msg "NetMHCpan: downloading data files..."
+        msg "NetMHCpan: data/ missing — fetching data files..."
         if have wget; then
-            wget -q "https://services.healthtech.dtu.dk/services/NetMHCpan-4.1/data.tar.gz" \
+            wget -q "https://services.healthtech.dtu.dk/services/NetMHCpan-4.2/data.tar.gz" \
                 -O "$pkgdir/data.tar.gz" && tar -xzf "$pkgdir/data.tar.gz" -C "$pkgdir" \
                 && rm -f "$pkgdir/data.tar.gz" && ok "data installed" \
                 || warn "data download failed — fetch data.tar.gz manually into $pkgdir and untar."
@@ -123,17 +127,20 @@ install_netmhcpan
 echo
 
 # ════════════════════════════════════════════════════════════════════════════
-# NetCTLpan 1.1 (Gate 1, preferred) — licence-gated tarball
+# NetCTLpan 1.1 (Gate 1) — DEPRECATED: discontinued by DTU, superseded by
+# NetMHCpan. We do NOT point new users at it; only configure a legacy tarball if
+# one is already present (for pipelines that still depend on it).
 # ════════════════════════════════════════════════════════════════════════════
 install_netctlpan() {
     local tarball pkgdir
     tarball=$(find_tarball 'netCTLpan-*.Linux.tar.gz')
     [[ -z "$tarball" ]] && tarball=$(find_tarball 'netCTLpan-*.tar.gz')
     if [[ -z "$tarball" ]]; then
-        warn "NetCTLpan: no tarball in $VENDOR_DIR (expected netCTLpan-1.1.Linux.tar.gz)."
-        warn "  Get it: https://services.healthtech.dtu.dk/services/NetCTLpan-1.1/"
+        msg "NetCTLpan: discontinued by DTU — skipping (use NetMHCpan). Drop a legacy"
+        msg "  netCTLpan-*.tar.gz in $VENDOR_DIR only if an existing pipeline needs it."
         return
     fi
+    warn "NetCTLpan is DEPRECATED (discontinued by DTU) — configuring legacy tarball anyway."
     msg "NetCTLpan: extracting $(basename "$tarball")"
     tar -xzf "$tarball" -C "$INSTALL_DIR"
     pkgdir=$(ls -d "$INSTALL_DIR"/netCTLpan-* 2>/dev/null | head -n1)
@@ -201,7 +208,7 @@ echo "     export FOLDX_PATH=\"$BIN_DIR/foldx\""
 fi
 echo
 echo "3. Enable the tools you installed in config.yaml (fusion.tools.<tool>.backend: local):"
-echo "     - one MHC-I tool   → netctlpan (preferred) OR netmhcpan"
+echo "     - one MHC-I tool   → netmhcpan (NetMHCpan 4.2; NetCTLpan is deprecated)"
 echo "     - one aggregation  → aggrescan3d"
 echo "   Leave camsol / ubpred as 'disabled'."
 echo

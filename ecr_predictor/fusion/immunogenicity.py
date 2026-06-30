@@ -11,14 +11,16 @@ This gate, per candidate:
   4. flags binders by %rank and reports epitope DENSITY (flagged / tested)
 
 MHC-I tool backends (config: fusion.tools.<tool>.backend = local|api|disabled):
-  - netmhcpan   NetMHCpan -p peptide mode (binding affinity / %rank)
-  - netctlpan   NetCTLpan (integrates proteasomal cleavage + TAP + MHC-I)
+  - netmhcpan   NetMHCpan -p peptide mode (binding affinity / %rank) — default
+  - netctlpan   NetCTLpan (proteasomal cleavage + TAP + MHC-I) — DEPRECATED
 
-NetCTLpan is preferred when available because it models whether the peptide is
-actually generated and transported, not just whether it would bind. Only one
-MHC-I tool needs to be enabled; netctlpan wins if both are.
+NetMHCpan is the default: NetCTLpan 1.1 was discontinued by DTU (superseded by
+NetMHCpan), so netmhcpan wins if both are enabled. NetCTLpan additionally models
+whether the peptide is actually generated and transported (not just whether it
+binds), so the legacy path is kept for pipelines that still have it installed.
+Only one MHC-I tool needs to be enabled.
 
-NOTE: the stdout parsers below target NetMHCpan 4.1 / NetCTLpan 1.1 column
+NOTE: the stdout parsers below target NetMHCpan 4.2 / NetCTLpan 1.1 column
 layouts. Validate against your installed version — DTU tools occasionally shift
 columns between releases.
 """
@@ -45,8 +47,9 @@ class ImmunoResult:
 
 
 def _pick_mhc1_tool(tools: dict) -> tuple[str, dict] | None:
-    """Return (tool_name, tool_cfg) for the enabled MHC-I tool, netctlpan first."""
-    for name in ("netctlpan", "netmhcpan"):
+    """Return (tool_name, tool_cfg) for the enabled MHC-I tool, netmhcpan first
+    (NetCTLpan is discontinued; used only when explicitly enabled as a legacy override)."""
+    for name in ("netmhcpan", "netctlpan"):
         cfg = tools.get(name, {})
         if backends.resolve_backend(cfg) != "disabled":
             return name, cfg

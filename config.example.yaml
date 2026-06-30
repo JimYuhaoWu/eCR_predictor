@@ -100,10 +100,11 @@ fusion:
 
   tools:
     # ── Gate 1: MHC-I junction neoepitope screen ─────────────────────────────
-    # Enable ONE MHC-I tool. netctlpan is preferred (models proteasomal cleavage
-    # + TAP + MHC-I); netmhcpan covers binding only.
+    # Enable ONE MHC-I tool. NetMHCpan 4.2 is the default (binding by %rank).
+    # NetCTLpan 1.1 (proteasomal cleavage + TAP + MHC-I) was DISCONTINUED by DTU
+    # and superseded by NetMHCpan — keep it disabled unless a legacy install needs it.
     netctlpan:
-      backend: disabled           # local | api | disabled
+      backend: disabled           # local | api | disabled (DEPRECATED tool)
       local:
         command: netCTLpan
         extra_args: ""
