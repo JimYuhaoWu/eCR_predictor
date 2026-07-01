@@ -60,9 +60,18 @@ Shared conda environment (`ecr`) covers both repos:
 ```bash
 conda env create -f environment.yml   # once per machine
 conda activate ecr
-pip install -e ../eCR_mod_lib         # must install mod_lib first
-pip install -e .
+python -m pip install -e ../eCR_mod_lib   # must install mod_lib first
+python -m pip install -e .
 ```
+
+**Always use `python -m pip`, not bare `pip`.** On multi-Python servers the `pip`
+on PATH is often a system/user pip bound to a different interpreter, so
+`pip install -e ../eCR_mod_lib` silently installs into the wrong Python and the
+env can't import the `scripts` package (`No module named 'scripts'`) even though
+the install "succeeded". Verify with `python -m pip -V` vs `pip -V`. Because
+`ecr_predictor` is picked up from the working directory when run from the repo
+root, this surfaces first as a missing `scripts` (the sibling eCR_mod_lib
+package), not a missing `ecr_predictor`. `check_fusion_env.sh` detects this.
 
 Both repos must sit as siblings:
 ```

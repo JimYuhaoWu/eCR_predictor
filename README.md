@@ -24,11 +24,13 @@ conda env create -f eCR_predictor/environment.yml
 conda activate ecr
 
 # Install both packages in editable mode
-pip install -e eCR_mod_lib
-pip install -e eCR_predictor
+python -m pip install -e eCR_mod_lib
+python -m pip install -e eCR_predictor
 ```
 
 The `ecr` conda environment covers all dependencies for both projects, including MEME Suite (`fimo`) for the refinement pipeline. If the environment already exists (e.g. created from `eCR_mod_lib`), skip the `conda env create` step.
+
+> **Use `python -m pip`, not bare `pip`.** On servers with multiple Python installs, `pip` on PATH may belong to a different interpreter than the `ecr` env, so a bare `pip install -e eCR_mod_lib` installs into the wrong Python — the install "succeeds" but the env then fails with `No module named 'scripts'`. Confirm they match with `python -m pip -V` vs `pip -V`. Run `bash eCR_predictor/check_fusion_env.sh` to verify the whole environment.
 
 **One-time server setup** (seeds the DB and pre-fetches JASPAR motifs for offline use):
 ```bash
