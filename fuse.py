@@ -47,6 +47,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
                    help="Comma-separated ED name subset from the library (default: all).")
     p.add_argument("--sequence", default=None,
                    help="DNA target the DBD must still bind (required for the structure phase).")
+    p.add_argument("--species", default=None,
+                   help='Expression-host species for Gate-1 self-tolerance, e.g. '
+                        '"Homo sapiens" (same style as cli.py). Default: auto-detected '
+                        "from the --dbd-input 'species' column. Resolves to "
+                        "data/proteomes/<slug>.fasta.")
     p.add_argument("--config", default=None, help="Path to config.yaml.")
     p.add_argument("--output", default="fusion_candidates.tsv", help="Output TSV path.")
     p.add_argument("--top-n-structure", type=int, default=10,
@@ -83,8 +88,34 @@ def _load_dbds(input_path: Path, subset: str | None) -> tuple[dict[str, str], di
             "tf_family": row.get("tf_family", ""),
             "zinc_finger_count": row.get("zinc_finger_count"),
             "baseline_ddg": None if pd.isna(baseline) else float(baseline),
+            "species": str(row.get("species", "") or ""),
         }
     return dbds, meta
+
+
+def _detect_species(dbd_meta: dict[str, dict]) -> str:
+    """Most common non-empty species across the input DBDs (auto-detect target)."""
+    from collections import Counter
+    counts = Counter(m.get("species", "") for m in dbd_meta.values() if m.get("species"))
+    return counts.most_common(1)[0][0] if counts else ""
+
+
+def _resolve_self_proteome(
+    fusion_cfg: dict, species_flag: str | None, dbd_meta: dict[str, dict],
+) -> tuple[str | None, str]:
+    """Resolve the self-proteome FASTA. Priority: explicit config path >
+    --species flag > species auto-detected from the input TSV. Returns
+    (path_or_None, source_label)."""
+    explicit = fusion_cfg.get("self_proteome", "")
+    if explicit:
+        return explicit, "config"
+    species = species_flag or _detect_species(dbd_meta)
+    if not species:
+        return None, "none"
+    from ecr_predictor.fusion.junction import resolve_proteome_path
+    path = resolve_proteome_path(species, fusion_cfg.get("proteome_dir"))
+    origin = "--species" if species_flag else "auto-detected"
+    return str(path), f"{origin}: {species}"
 
 
 def _load_eds(subset: str | None) -> dict[str, str]:
@@ -145,10 +176,19 @@ def main(argv: list[str] | None = None) -> None:
     # Self-proteome blob (Gate 1)
     # -------------------------------------------------------------------------
     proteome_blob = None
-    self_fa = fusion_cfg.get("self_proteome", "")
-    if self_fa:
+    self_fa, source = _resolve_self_proteome(fusion_cfg, args.species, dbd_meta)
+    if not self_fa:
+        print("      Self proteome: none (no --species, no 'species' column, no "
+              "config path) — Gate 1 self-tolerance filtering OFF.", file=sys.stderr)
+    elif not Path(self_fa).exists():
+        print(f"      WARNING: self proteome not found ({source}): {self_fa}\n"
+              f"      Gate 1 self-tolerance filtering OFF. Download it there, e.g.:\n"
+              f"        curl -o {self_fa}.gz 'https://rest.uniprot.org/uniprotkb/stream"
+              f"?query=(organism_name:...)+AND+(reviewed:true)&format=fasta&compressed=true'"
+              f" && gunzip {self_fa}.gz", file=sys.stderr)
+    else:
         from ecr_predictor.fusion.junction import load_proteome_blob
-        print(f"      Loading self proteome: {self_fa}", file=sys.stderr)
+        print(f"      Loading self proteome ({source}): {self_fa}", file=sys.stderr)
         proteome_blob = load_proteome_blob(self_fa)
 
     from ecr_predictor.fusion import backends

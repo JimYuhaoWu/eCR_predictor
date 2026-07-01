@@ -49,6 +49,7 @@ def get_fusion_config(cfg: dict[str, Any]) -> dict[str, Any]:
     fusion.setdefault("orientation", "dbd_n")
     fusion.setdefault("linkers", [])
     fusion.setdefault("self_proteome", "")
+    fusion.setdefault("proteome_dir", "data/proteomes")
     fusion.setdefault("junction_window", 5)
     fusion.setdefault("tools", {})
     return fusion

@@ -241,15 +241,28 @@ if fusion_cfg:
     linkers = fusion_cfg.get("linkers", [])
     line("PASS" if linkers else "FAIL", f"linkers configured: {len(linkers)}",
          "" if linkers else "add fusion.linkers in config.yaml")
-    # self proteome
+    # self proteome — explicit config path wins, else species resolves to
+    # <proteome_dir>/<slug>.fasta at run time; report which organism files exist.
     sp = fusion_cfg.get("self_proteome", "")
-    if not sp:
-        line("WARN", "self_proteome not set",
-             "Gate 1 self-tolerance filtering OFF — set fusion.self_proteome to a human proteome FASTA")
-    elif not Path(sp).exists():
-        line("FAIL", f"self_proteome path missing: {sp}", "download UP000005640 (human) or fix the path")
+    if sp:
+        if Path(sp).exists():
+            line("PASS", f"self_proteome (explicit config): {sp}")
+        else:
+            line("FAIL", f"self_proteome path missing: {sp}", "fix the path or clear it to use --species resolution")
     else:
-        line("PASS", f"self_proteome: {sp}")
+        pdir = Path(fusion_cfg.get("proteome_dir", "data/proteomes"))
+        if not pdir.is_absolute():
+            pdir = REPO / pdir
+        fastas = sorted(pdir.glob("*.fasta")) if pdir.is_dir() else []
+        if fastas:
+            names = ", ".join(f.stem for f in fastas)
+            line("PASS", f"proteome files in {pdir}: {names}",
+                 "Gate 1 self-tolerance uses <slug>.fasta matching the run's species "
+                 "(--species or auto-detected from --dbd-input)")
+        else:
+            line("WARN", f"no <species>.fasta in {pdir}",
+                 "Gate 1 self-tolerance OFF unless present — put e.g. homo_sapiens.fasta / "
+                 "mus_musculus.fasta there (or set fusion.self_proteome)")
 
 # ----- 5. Structure-phase prereqs (optional; only past --stop-after prune) --
 section("[5] Structure phase (optional)")

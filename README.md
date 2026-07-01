@@ -165,6 +165,8 @@ python fuse.py \
 
 DBDs are read from the `gene_name` + `sequence_aa` columns of the Step-1/2 output (use `--dbd FLI1,ETV6` to subset). **Effector domains are read from the eCR_mod_lib library** (`type='ED'`; use `--ed VP64,KRAB` to subset). The linker library and tool backends come from the `fusion:` section of `config.yaml`. `--sequence` is the DNA target the DBD must still bind (only needed for the structure phase).
 
+**Expression host (`--species`).** Gate-1 self-tolerance needs the proteome of the organism the fusion will be expressed in. This follows the same `--species "Homo sapiens"` style as `cli.py`, but is **optional**: if omitted, the organism is **auto-detected** from the `species` column of `--dbd-input` (which `cli.py` populated from your Step-1 `--species`). Pass `--species` explicitly only to override — e.g. a human DBD expressed in a murine model. See [Self-tolerance filtering](#key-design-points) for where the FASTA files go.
+
 ### Pipeline
 
 The pipeline runs **cheap sequence-based gates first**, prunes to the best candidates, and only then spends HPCC/GPU on the structure phase — so AF3 folding never runs on the full combinatorial library:
@@ -276,7 +278,18 @@ The client POSTs the job payload to `url`, then polls `url/<job_id>` until the s
 ### Key design points
 
 - **Sequence-first ordering.** Cheap gates prune the library before any AF3/FoldX run, so the expensive structure phase only ever sees `--top-n-structure` survivors.
-- **Self-tolerance filtering.** Because both domains are endogenous, only junction-spanning peptides are potential neoepitopes — and any that occur verbatim in the human proteome are still self. Provide `fusion.self_proteome` (a proteome FASTA) to subtract them before the MHC-I scan.
+- **Self-tolerance filtering.** Because both domains are endogenous, only junction-spanning peptides are potential neoepitopes — and any that occur verbatim in the host proteome are still self, so they're subtracted before the MHC-I scan. The proteome is resolved per run in this priority order: an explicit `fusion.self_proteome` path > `--species` > the organism auto-detected from `--dbd-input`. The `--species` form maps to `<proteome_dir>/<slug>.fasta` (default `data/proteomes/`, e.g. `"Homo sapiens"` → `data/proteomes/homo_sapiens.fasta`), so you pick the organism per run without editing config. **Drop the FASTA files there yourself** (the dir is gitignored — proteomes are large); download the reviewed canonical set from UniProt:
+  ```bash
+  mkdir -p data/proteomes
+  # Human (UP000005640)
+  curl -o data/proteomes/homo_sapiens.fasta.gz \
+    'https://rest.uniprot.org/uniprotkb/stream?query=(proteome:UP000005640)+AND+(reviewed:true)&format=fasta&compressed=true'
+  # Mouse (UP000000589)
+  curl -o data/proteomes/mus_musculus.fasta.gz \
+    'https://rest.uniprot.org/uniprotkb/stream?query=(proteome:UP000000589)+AND+(reviewed:true)&format=fasta&compressed=true'
+  gunzip data/proteomes/*.fasta.gz
+  ```
+  The reviewed canonical set (~13 MB human, ~13–15 MB mouse) is the right tier — don't pull the full TrEMBL proteome (~60 MB, mostly redundant predicted entries) for exact-match filtering. `check_fusion_env.sh` reports which `<species>.fasta` files it finds.
 - **%rank, not raw IC₅₀.** Binders are flagged by `%rank ≤ rank_threshold` (default 2.0) across an HLA-I panel; the gate reports **epitope density** (flagged / tested), not single hits.
 - **Pareto over composite.** The output marks the Pareto-optimal set across the liability axes rather than collapsing them into one opaque score (a `risk_score` is also provided for quick sorting).
 - **Degradation ↔ presentation tension.** Proteasomal degradation (Gate 3) is what *generates* MHC-I peptides (Gate 1); the pipeline surfaces both and does not auto-resolve the trade-off.

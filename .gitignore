@@ -6,5 +6,6 @@
 __pycache__/
 build/
 config.yaml
+data/proteomes/
 dist/
 jaspar_cache/

@@ -91,9 +91,14 @@ fusion:
   # Effector domains (EDs) are read from the eCR_mod_lib library (type='ED'),
   # NOT from this file. Subset them at the CLI with: fuse.py --ed VP64,KRAB
 
-  # Human proteome FASTA for self-tolerance filtering (strongly recommended).
-  # Junction peptides that occur verbatim in self are dropped before MHC-I scan.
-  self_proteome: ""               # e.g. /data/uniprot/UP000005640_9606.fasta
+  # Self-proteome FASTA for Gate-1 self-tolerance (strongly recommended): junction
+  # peptides occurring verbatim in self are dropped before the MHC-I scan.
+  # Resolution priority: self_proteome (explicit path, below) > fuse.py --species >
+  # species auto-detected from the --dbd-input 'species' column. The species form
+  # resolves to <proteome_dir>/<slug>.fasta (e.g. "Homo sapiens" -> homo_sapiens.fasta),
+  # so you pick the organism per run without editing this file.
+  self_proteome: ""               # explicit override; leave empty to use species resolution
+  proteome_dir: data/proteomes    # where <species-slug>.fasta files live (repo-relative)
 
   # Residues either side of a boundary still counted as "at the junction" (Gate 2).
   junction_window: 5

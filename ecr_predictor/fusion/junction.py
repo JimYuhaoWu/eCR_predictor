@@ -13,6 +13,27 @@ from pathlib import Path
 
 from ecr_predictor.fusion.assemble import FusionCandidate
 
+# Repo root (…/eCR_predictor), so the default proteome dir resolves regardless
+# of the working directory — mirrors how query.py anchors the library DB path.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_DEFAULT_PROTEOME_DIR = "data/proteomes"
+
+
+def species_slug(species: str) -> str:
+    """Map a species binomial to a filename slug: 'Homo sapiens' -> 'homo_sapiens'."""
+    return "_".join(species.strip().lower().split())
+
+
+def resolve_proteome_path(species: str, proteome_dir: str | None = None) -> Path:
+    """Resolve a species to its proteome FASTA path: <proteome_dir>/<slug>.fasta.
+
+    A relative proteome_dir (the default) is anchored at the repo root so the path
+    is stable no matter where fuse.py is run from."""
+    base = Path(proteome_dir or _DEFAULT_PROTEOME_DIR)
+    if not base.is_absolute():
+        base = _REPO_ROOT / base
+    return base / f"{species_slug(species)}.fasta"
+
 
 def junction_peptides(
     candidate: FusionCandidate,
