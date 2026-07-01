@@ -1,5 +1,6 @@
 *.db
 *.egg-info/
+af3_outputs/
 *.py[cod]
 .eggs/
 .env
