@@ -214,7 +214,7 @@ def main(argv: list[str] | None = None) -> None:
     # [3] Prune — Pareto over sequence axes → survivors
     # -------------------------------------------------------------------------
     print("\n[3/5] Pruning to Pareto-optimal survivors...", file=sys.stderr)
-    from ecr_predictor.fusion.score import (
+    from ecr_predictor.fusion.ranking import (
         build_score_table, add_pareto_and_rank, SEQUENCE_AXES,
     )
     seq_table = add_pareto_and_rank(
@@ -292,7 +292,7 @@ def _write_assembly(candidates, path: Path) -> None:
 
 
 def _write_scores(candidates, immuno, aggregation, stability, structure, path: Path) -> None:
-    from ecr_predictor.fusion.score import build_score_table, add_pareto_and_rank
+    from ecr_predictor.fusion.ranking import build_score_table, add_pareto_and_rank
     df = build_score_table(candidates, immuno, aggregation, stability, structure)
     df = add_pareto_and_rank(df)
     path.write_text(df.to_csv(sep="\t", index=False, na_rep="NA"), encoding="utf-8")

@@ -108,15 +108,10 @@ def _residue_scores_structure(
     ImportError if freesasa is unavailable; the caller falls back to sequence mode.
     """
     import freesasa  # raises ImportError -> sequence fallback
-    from Bio.PDB import MMCIFParser, PDBIO
-    from Bio.PDB.Polypeptide import is_aa
+    from ecr_predictor import structure_utils as su
 
-    structure = MMCIFParser(QUIET=True).get_structure("m", cif_path)
-    model = structure[0]
-    if protein_chain not in model:
-        raise KeyError(f"chain {protein_chain} not in {cif_path}")
-    chain = model[protein_chain]
-    residues = [r for r in chain.get_residues() if is_aa(r, standard=True)]
+    model = su.first_model(cif_path)              # raises KeyError-free; chain check below
+    residues = su.ordered_residues(model, protein_chain, standard_only=True)
     if not residues:
         raise ValueError(f"no standard residues in chain {protein_chain}")
 
@@ -125,9 +120,7 @@ def _residue_scores_structure(
     fd, pdb_path = tempfile.mkstemp(suffix=".pdb")
     os.close(fd)
     try:
-        io = PDBIO()
-        io.set_structure(chain)
-        io.save(pdb_path)
+        su.save_pdb(model[protein_chain], pdb_path)
         result = freesasa.calc(freesasa.Structure(pdb_path))
     finally:
         try:

@@ -36,7 +36,7 @@ ECR_predictor/
 │   │   ├── immunogenicity.py # Gate 1: MHC-I neoepitope screen
 │   │   ├── aggregation.py    # Gate 2: built-in AGGRESCAN scorer (a3v + freesasa) / CamSol via api
 │   │   ├── stability.py      # Gate 3: N-end rule / degron / UbPred
-│   │   └── score.py          # composite risk + Pareto ranking
+│   │   └── ranking.py        # composite risk + Pareto ranking
 │   └── config.py         # load/validate config.yaml
 ├── jaspar_cache/          # .jaspar files after prefetch (gitignored)
 ├── af3_outputs/           # AF3 JSON inputs, CIF outputs, run_log.json (gitignored)

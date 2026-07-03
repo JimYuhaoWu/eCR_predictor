@@ -3,10 +3,23 @@ Load and validate config.yaml for the refinement pipeline.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
 _DEFAULT_CONFIG_PATH = Path(__file__).parents[1] / "config.yaml"
+
+
+def resolve_secret(env_name: str, config_value: str = "") -> str:
+    """Resolve a credential: the named env var if set, else the config value.
+
+    Returns '' if neither is set. Env var always wins so credentials need not be
+    written into config.yaml. Used by every backend that takes a key/password."""
+    if env_name:
+        val = os.environ.get(env_name, "")
+        if val:
+            return val
+    return config_value or ""
 
 
 def load_config(path: Path | str | None = None) -> dict[str, Any]:

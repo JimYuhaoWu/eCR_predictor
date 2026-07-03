@@ -21,7 +21,6 @@ JSON format follows the AF3 input spec:
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 import time
@@ -262,6 +261,7 @@ def _get_password(hpcc: dict[str, Any]) -> str:
     For TOTP auth: generates and returns a TOTP code from the shared secret
                    (from ECR_HPCC_TOTP_SECRET env var or config).
     """
+    from ecr_predictor.config import resolve_secret
     auth_method = hpcc.get("auth_method", "password").lower()
 
     if auth_method == "totp":
@@ -271,9 +271,7 @@ def _get_password(hpcc: dict[str, Any]) -> str:
         except ImportError:
             raise ImportError("pyotp is required for TOTP authentication: pip install pyotp")
 
-        secret = os.environ.get("ECR_HPCC_TOTP_SECRET", "")
-        if not secret:
-            secret = hpcc.get("totp_secret", "")
+        secret = resolve_secret("ECR_HPCC_TOTP_SECRET", hpcc.get("totp_secret", ""))
         if not secret:
             raise ValueError(
                 "HPCC TOTP secret not found. Set the ECR_HPCC_TOTP_SECRET environment variable:\n"
@@ -287,10 +285,7 @@ def _get_password(hpcc: dict[str, Any]) -> str:
 
     elif auth_method == "password":
         # Static password authentication
-        pw = os.environ.get("ECR_HPCC_PASSWORD", "")
-        if pw:
-            return pw
-        pw = hpcc.get("ssh_password", "")
+        pw = resolve_secret("ECR_HPCC_PASSWORD", hpcc.get("ssh_password", ""))
         if pw:
             return pw
         raise ValueError(
@@ -618,10 +613,8 @@ _CHAI_TIMEOUT = 3600       # max wait per job (seconds)
 
 
 def _chai_api_key(online_cfg: dict[str, Any]) -> str:
-    key = os.environ.get("ECR_CHAI_API_KEY", "")
-    if key:
-        return key
-    key = online_cfg.get("api_key", "")
+    from ecr_predictor.config import resolve_secret
+    key = resolve_secret("ECR_CHAI_API_KEY", online_cfg.get("api_key", ""))
     if key:
         return key
     raise ValueError(
@@ -848,10 +841,12 @@ def run_af3_prediction(
     else:
         raise ValueError(f"Unknown AF3 backend: {backend!r}. Choose local | hpcc | online.")
 
+    def _cif_for_gene(gene: str):
+        cif = results.get(gene.replace(" ", "_"))
+        return str(cif) if cif is not None else pd.NA
+
     hits = hits.copy()
-    hits["af3_cif_path"] = hits["gene_name"].apply(
-        lambda g: str(results[g.replace(" ", "_")]) if g.replace(" ", "_") in results and results[g.replace(" ", "_")] is not None else pd.NA
-    )
+    hits["af3_cif_path"] = hits["gene_name"].apply(_cif_for_gene)
 
     n_done = hits["af3_cif_path"].notna().sum()
     print(f"[AF3] {n_done}/{len(jobs)} structures retrieved.", file=sys.stderr)

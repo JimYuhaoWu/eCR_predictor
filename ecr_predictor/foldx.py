@@ -157,12 +157,8 @@ def _trim_cif_by_confidence(
 
 def _cif_to_pdb(cif_path: Path, pdb_path: Path) -> None:
     """Convert an mmCIF file to PDB format using BioPython."""
-    from Bio.PDB import MMCIFParser, PDBIO
-    parser = MMCIFParser(QUIET=True)
-    struct = parser.get_structure(cif_path.stem, str(cif_path))
-    io = PDBIO()
-    io.set_structure(struct)
-    io.save(str(pdb_path))
+    from ecr_predictor.structure_utils import cif_to_pdb
+    cif_to_pdb(cif_path, pdb_path)
 
 
 # ---------------------------------------------------------------------------

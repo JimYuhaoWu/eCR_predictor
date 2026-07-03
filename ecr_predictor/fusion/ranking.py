@@ -7,6 +7,9 @@ Pareto-optimal set — candidates not strictly worse than any other on all axes.
 A convenience composite `risk_score` is also provided for a quick sort, but the
 Pareto flag is the decision-relevant output.
 
+(Named `ranking` — not `score` — to avoid colliding with ecr_predictor.score,
+which maps validation_level → annotation_confidence for Step 1.)
+
 Axes (all "lower is better"):
   immuno_density      fraction of junction peptides flagged as MHC-I binders
   aggregation_risk    1.0 if a junction aggregation hotspot, else 0.0

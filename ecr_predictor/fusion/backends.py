@@ -14,7 +14,6 @@ only handles the local-vs-api plumbing common to all of them.
 """
 from __future__ import annotations
 
-import os
 import subprocess
 import sys
 import tempfile
@@ -46,12 +45,8 @@ def api_key_from_env(api_cfg: dict[str, Any]) -> str:
     Resolve an API key from the env var named in api_cfg['api_key_env'],
     falling back to api_cfg['api_key']. Returns '' if neither is set.
     """
-    env_name = api_cfg.get("api_key_env", "")
-    if env_name:
-        key = os.environ.get(env_name, "")
-        if key:
-            return key
-    return api_cfg.get("api_key", "")
+    from ecr_predictor.config import resolve_secret
+    return resolve_secret(api_cfg.get("api_key_env", ""), api_cfg.get("api_key", ""))
 
 
 # ---------------------------------------------------------------------------
