@@ -201,12 +201,12 @@ def score_offtarget(
             continue
         if s >= threshold:
             n_sites += 1
-            unweighted += s
-            weighted += s * weight_fn(r)
+            unweighted += float(s)
+            weighted += float(s) * weight_fn(r)
     return {
         "n_offtarget_sites": n_sites,
-        "offtarget_effect_score": round(weighted, 4),
-        "offtarget_unweighted": round(unweighted, 4),
+        "offtarget_effect_score": round(float(weighted), 4),
+        "offtarget_unweighted": round(float(unweighted), 4),
     }
 
 
