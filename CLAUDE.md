@@ -21,7 +21,9 @@ Three-stage CLI pipeline:
 ECR_predictor/
 ├── ecr_predictor/
 │   ├── query.py          # DBD lookup + species matching (exact → genus fallback)
-│   ├── scan.py           # JASPAR PWM scoring via BioPython (parallel fetch)
+│   ├── scan.py           # JASPAR PWM scoring via BioPython (parallel fetch); fetch_pwm/best_site_score = shared PWM core
+│   ├── offtarget.py      # DBD off-target eval over accessible regions (union of state peaks) — two-tier weighted
+│   ├── structure_utils.py# shared Bio.PDB CIF/PDB helpers (foldx + fusion aggregation)
 │   ├── score.py          # validation_level → annotation_confidence label
 │   ├── output.py         # build result table, write TSV
 │   ├── prefetch.py       # pre-download JASPAR motifs to jaspar_cache/
@@ -47,6 +49,7 @@ ECR_predictor/
 ├── cli.py                 # Step 1 entrypoint
 ├── refine.py              # Step 2 entrypoint
 ├── fuse.py                # Step 3 entrypoint (fusion-design developability)
+├── offtarget.py           # off-target evaluation entrypoint (DBD specificity)
 ├── config.example.yaml    # config template — copy to config.yaml and edit
 ├── environment.yml        # shared conda environment (covers both repos)
 ├── server_setup.sh        # one-time server setup (install + seed DB + prefetch)

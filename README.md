@@ -300,6 +300,39 @@ The client POSTs the job payload to `url`, then polls `url/<job_id>` until the s
 
 ---
 
+## Off-target evaluation (`offtarget.py`)
+
+A DBD-level **specificity** screen. For each DBD's JASPAR motif, scan the *accessible* genomic regions of the reprogramming trajectory for unintended strong binding sites and summarize them as an **off-target effect score**. A TF can only bind open chromatin, so the background is the **union of accessibility peaks across states** (e.g. MEF ∪ mES ATAC peaks), not the whole genome.
+
+```bash
+python offtarget.py \
+  --peaks MEF=MEF.e7_peaks.bed mES=mES.e7_peaks.bed \
+  --from MEF --to mES \
+  --genome /path/to/mm10.fa \
+  --dbd-input predictions.tsv \
+  --output offtarget.tsv
+```
+
+Build/inspect the background region set alone (no genome needed):
+```bash
+python offtarget.py --peaks MEF=MEF.e7_peaks.bed mES=mES.e7_peaks.bed \
+  --from MEF --to mES --stop-after-regions --regions-out union_regions.bed
+```
+
+**Two-tier severity weighting** — the score is Σ over off-target sites of (site strength × region weight):
+- **Tier 1 (now):** region weight from accessibility *dynamics* — regions that **open** (target-state only) or **close** (start-state only) during the transition outweigh **shared/constitutive** background (default 1.0 / 1.0 / 0.3). A provisional proxy for driver importance, derived from the peak sets alone.
+- **Tier 2 (later):** swap in per-region driver weights from **eCR_navigator** through the same weight interface — the scoring code does not change, only the weight source.
+
+| Output column | Meaning |
+|---|---|
+| `n_offtarget_sites` | # accessible regions with a site above `--threshold` (default 0.8) |
+| `offtarget_effect_score` | Σ (site strength × region weight) — severity-weighted |
+| `offtarget_unweighted` | Σ site strength (weights ignored) — for comparison |
+
+The genome FASTA assembly **must match the peak coordinates** (e.g. mm10). DBDs without a JASPAR motif return `NA`. Reuses the Step-1 PWM core (`scan.fetch_pwm` / `scan.best_site_score`).
+
+---
+
 ## Configuration (config.yaml)
 
 `config.yaml` is gitignored (it contains credentials). Copy the template and edit:

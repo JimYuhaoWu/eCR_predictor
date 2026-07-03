@@ -144,6 +144,23 @@ def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
     return raw_max / max_possible
 
 
+# ---------------------------------------------------------------------------
+# Public PWM core — shared by Step-1 scanning and the off-target module
+# (ecr_predictor.offtarget). Kept as thin public wrappers so callers don't reach
+# into private helpers.
+# ---------------------------------------------------------------------------
+
+def fetch_pwm(jaspar_id: str) -> "motifs.Motif | None":
+    """Fetch a JASPAR motif (local cache → BioPython DB → REST). None if missing."""
+    return _fetch_jaspar_pwm(jaspar_id)
+
+
+def best_site_score(motif: "motifs.Motif", sequence: str) -> float:
+    """Normalized max log-odds ([-1, 1]) of `motif` over `sequence` — the strength
+    of the strongest binding site in the sequence (NaN if unscorable)."""
+    return _log_odds_score(motif, sequence)
+
+
 def score_dbds(dbds: pd.DataFrame, sequence: str) -> pd.Series:
     """
     Compute motif_score for each DBD row against `sequence`.
