@@ -10,11 +10,14 @@
 
 ## What this project does
 
-Three-stage CLI pipeline:
+Three-stage CLI pipeline, with an optional target-selection front-end:
+0. **`target.py`** — the on-target bridge: turns an `eCR_navigator` run bundle (nominated **regions**) into short AF3-safe binding **sites** for `cli.py --sequence`. Optional — you can hand-type a site instead. See "Target site selection" below.
 1. **`cli.py`** — predicts which DBDs from `eCR_mod_lib` are likely to bind a query DNA sequence. Returns a ranked TSV with two independent confidence scores.
 2. **`refine.py`** — filters, FIMO-validates, runs AF3 structure prediction, and estimates binding affinity with FoldX.
 3. **`fuse.py`** — assembles DBD + linker + ED fusion candidates and screens them for developability liabilities (MHC-I junction immunogenicity, aggregation, stability) before wet-lab synthesis. Target modality: intracellular expression (viral vector / mRNA).
 4. **`preview.py`** — (optional, read-only) renders a self-contained interactive HTML of predicted post-eCR chromatin accessibility (`measured start → model → measured end`, live efficacy slider). Contract: `docs/preview_contract.md`.
+
+`offtarget.py` is a DBD-level specificity screen that runs alongside (not a pipeline stage): it scores each DBD's off-target burden over accessible chromatin, and `target.py` joins that burden as its specificity axis.
 
 ## Repo layout
 
@@ -22,8 +25,9 @@ Three-stage CLI pipeline:
 ECR_predictor/
 ├── ecr_predictor/
 │   ├── query.py          # DBD lookup + species matching (exact → genus fallback)
-│   ├── scan.py           # JASPAR PWM scoring via BioPython (parallel fetch); fetch_pwm/best_site_score = shared PWM core
-│   ├── offtarget.py      # DBD off-target eval over accessible regions (union of state peaks) — two-tier weighted
+│   ├── scan.py           # JASPAR PWM scoring via BioPython, both strands (parallel fetch); fetch_pwm/best_site_score/best_site_hit = shared PWM core
+│   ├── target.py         # region → binding site: eCR_navigator run bundle → sites.tsv for cli.py (+ library-gap report)
+│   ├── offtarget.py      # DBD off-target eval over accessible regions (union of state peaks) — two-tier weighted (Tier-2 = --weights)
 │   ├── structure_utils.py# shared Bio.PDB CIF/PDB helpers (foldx + fusion aggregation)
 │   ├── score.py          # validation_level → annotation_confidence label
 │   ├── output.py         # build result table, write TSV
@@ -47,6 +51,7 @@ ECR_predictor/
 │       ├── <gene>.json       # AF3 input per job
 │       ├── <gene>.slurm      # generated Slurm script (hpcc backend)
 │       └── run_log.json      # job state log for resume on interruption
+├── target.py              # Step 0 entrypoint (region → site)
 ├── cli.py                 # Step 1 entrypoint
 ├── refine.py              # Step 2 entrypoint
 ├── fuse.py                # Step 3 entrypoint (fusion-design developability)
@@ -106,6 +111,60 @@ python refine.py \
 ```
 
 Deploy to server: `git pull` in both repos, re-run `server_setup.sh` if DB or motif cache needs updating.
+
+## Target site selection (target.py — Step 0)
+
+The on-target bridge from `eCR_navigator`. The navigator nominates **regions**
+(hundreds of bp); `refine.py` folds a base-paired duplex (`af3.py` chain B sense /
+chain C revcomp), so the design target must be a **short site** (~30 bp). `target.py`
+converts one to the other, consuming the navigator's frozen **run bundle**
+(`manifest.json` + `nominations.tsv` [+ `weights.tsv`]; contract in
+`../eCR_navigator/docs/run_bundle_contract.md`).
+
+```
+nominations.tsv → target.py
+   | extract region sequence   (pyfaidx; manifest.transition.assembly)
+   | scan library DBD motifs    [scan.fetch_pwm + best_site_hit, both strands]
+   | best window per DBD, flank to --site-length
+   | join off-target burden by jaspar_id [offtarget.py --offtarget], rescale to specificity
+   v
+ sites.tsv → cli.py --sequence <site> → refine.py → fuse.py
+```
+
+**Site selection is LIBRARY-FIRST** — best PWM hit per library DBD, then filtered by
+off-target burden (not specificity-first: that needs a genome-wide scan per candidate
+window, and the library is small enough — 9 of 38 DBDs carry a JASPAR motif, 8 human /
+1 mouse — to scan exhaustively). **No new scoring code:** on-target and off-target are
+the same PWM machinery inverted; burden is a property of the *motif*, computed once by
+`offtarget.py` and joined here on `jaspar_id`.
+
+**Load-bearing rules (all in the run-bundle contract):**
+- **Order by `rank`, never threshold `nomination_score`.** The score is a percentile
+  (`score_norm: rank`), so a top-1% band is ~0.99–1.0 by construction and carries no
+  within-band signal. `--top-n` cuts on `rank`; it is the design budget, but **all**
+  nominations are still scanned for the gap report.
+- **`direction` picks the ED, not the DBD** (`+` → activator e.g. VP64; `−` → repressor
+  e.g. KRAB); flows to `fuse.py`. Validated trust cutoff **|direction| ≥ 0.05**
+  (eCR_navigator Claim 2B, `docs/claim2b_results.md`) → below it `ed_class=ambiguous`.
+  `--direction-min` **labels** rows, never drops them (the direction column is otherwise
+  unvalidated). Empty direction = `unmeasured` (kept distinct from measured-flat 0.0).
+- **Refusal is a first-class output.** A Gate-1-refused bundle (`nomination.refused`)
+  → print `refusal_reason` to stderr, emit a header-only `sites.tsv`, **exit 0**. Not
+  an error. Short-circuits before the library/genome is even loaded.
+- **Library-gap report (`--gaps-out`).** Regions where no library DBD clears the motif
+  threshold are undesignable today; each is emitted with its best near-miss DBD — the
+  direct `eCR_mod_lib` expansion signal. Expected to be the larger output.
+
+**Assembly is load-bearing.** `check_assembly()` hard-fails (exit 1) if a nominated
+chromosome is absent from the FASTA or a region runs past its end — a silent
+hg38/mm10 mismatch would corrupt every site. DBDs are **species-matched** to the
+transition (like `cli.py`) because the eCR is expressed intracellularly — a
+cross-species DBD makes the whole domain foreign (a worse `fuse.py` Gate-1 liability).
+
+`sites.tsv` `sequence` is always the **+ strand reference** at `[site_start, site_end)`;
+`strand` records which strand the motif reads on. `design_score = motif_score ×
+specificity` is a convenience sort only — `pareto_optimal` over (on-target ↑, burden ↓)
+is the honest ranking (same pattern as `fusion/ranking.py`; scores stay independent).
 
 ## JASPAR motif fetch order
 
@@ -309,10 +368,12 @@ without any external binary.
 
 ## Key implementation notes
 
-- DBDs with no `jaspar_id` are **not dropped** — they appear with `motif_score = NA`.
+- DBDs with no `jaspar_id` are **not dropped** — they appear with `motif_score = NA` (but `target.py` *does* drop them: a DBD with no motif cannot be placed on a locus by sequence).
 - Species matching: exact first, then genus-level fallback (first word of species name). Flagged in `query_species_match` column.
+- **Both strands are scanned.** `scan._log_odds_score` scores the PSSM and its reverse complement and takes the better hit, so `motif_score` (and `best_site_score`) reflect either strand — a TF binds dsDNA, and AF3 folds the query as a duplex. `best_site_hit` additionally returns the hit's offset + strand (used by `target.py`). A forward-only scan scored a perfect reverse-strand site near its *worst* (~−0.49), reading as a non-binder.
+- **Tier-2 off-target weights** (`offtarget.weights_weight_fn`): builds a `weight_fn(region)` from an eCR_navigator `weights.tsv` via per-chrom sorted intervals + bisect; overlap → **max** `driver_score` (conservative for a severity weight), no overlap → the region's Tier-1 dynamics weight. Same `weight_fn` interface `score_offtarget` already took — the scoring loop is unchanged. Wired through `offtarget.py --weights`.
 - `pssm.calculate()` returns a scalar when sequence length == motif length; wrapped with `np.atleast_1d`.
 - Sequences shorter than a motif return `motif_score = NA` (not an error).
-- Motif fetches are parallelized with `ThreadPoolExecutor` (8 workers).
+- Motif fetches are parallelized with `ThreadPoolExecutor` (8 workers). NOTE: JASPAR's REST API can drop concurrent TLS handshakes (`SSLError: UNEXPECTED_EOF_WHILE_READING`), so the parallel fetch in `scan._fetch_all_parallel` and `prefetch.py` can fail where a **sequential** fetch succeeds — populate `jaspar_cache/` (retry `prefetch.py`; it skips already-cached IDs) to avoid it. `target.py` fetches sequentially and is unaffected.
 - Python 3.8 compatibility required (server constraint) — `with_stem()` unavailable, use `with_name()`.
 - `paramiko` and `pyyaml` are required for the refinement pipeline (included in `environment.yml`).

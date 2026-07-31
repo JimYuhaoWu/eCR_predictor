@@ -39,6 +39,67 @@ bash server_setup.sh
 
 ---
 
+## Step 0 — Target (nominated region → binding site)
+
+`cli.py` takes a **short** DNA site (~30 bp). [`eCR_navigator`](https://github.com/JimYuhaoWu/eCR_navigator) nominates **regions** (hundreds of bp). `target.py` is the bridge: it turns a navigator **run bundle** into a table of AF3-safe sites, one per library DBD that can bind inside a nominated region, ranked by on-target strength × specificity. This step is **optional** — if you already have a target site, hand it to Step 1 directly.
+
+```bash
+python target.py \
+  --bundle    ../eCR_navigator/examples/run_bundle/in_gse299923 \
+  --genome    /path/to/hg38.fa \
+  --offtarget offtarget.tsv \
+  --top-n     50 \
+  --output    sites.tsv \
+  --gaps-out  gaps.tsv
+```
+
+| Argument | Required | Default | Description |
+|---|---|---|---|
+| `--bundle` | Yes | — | eCR_navigator run-bundle dir (`manifest.json` + `nominations.tsv`) |
+| `--genome` | Yes | — | Genome FASTA; assembly **must** match `manifest.transition.assembly` |
+| `--offtarget` | No | — | `offtarget.py` output TSV, joined on `jaspar_id` for the specificity axis. Omit to rank on on-target strength alone |
+| `--output` | No | `sites.tsv` | Ranked target-site table |
+| `--gaps-out` | No | — | Library-gap report (regions no library DBD can target) |
+| `--top-n` | No | `50` | Design budget: emit sites for the top-N regions **by rank** |
+| `--site-length` | No | `30` | AF3 duplex length in bp |
+| `--direction-min` | No | `0.05` | `\|direction\|` below this is labelled `ed_class=ambiguous` (labels only, never drops) |
+| `--species` | No | from manifest | Override the library species filter |
+
+The output `sequence` column feeds straight into Step 1:
+```bash
+python cli.py --sequence <sequence-from-sites.tsv> --species "Homo sapiens" --include-sequence
+```
+
+**How sites are chosen (library-first).** The library is small enough to scan exhaustively, so `target.py` takes the best PWM hit per library DBD inside each nominated region, then filters by off-target burden — not the reverse. Both strands are scanned (a target is folded as a duplex), and `strand` records which one the motif reads on.
+
+**Four load-bearing rules:**
+- **Order by `rank`, never `nomination_score`.** The navigator's score is a percentile, so a top-1% band is ~0.99–1.0 by construction and carries no within-band prioritization. `--top-n` cuts on `rank`.
+- **`direction` picks the effector domain, not the DBD** (`+` → activator e.g. VP64; `−` → repressor e.g. KRAB), and flows through to `fuse.py`. Validated trust cutoff: `|direction| ≥ 0.05` (eCR_navigator Claim 2B); below it, `ed_class=ambiguous`.
+- **Refusal is a valid answer.** A Gate-1-refused bundle (e.g. an anti-informative transition) yields an empty `sites.tsv` and exit 0 — not an error.
+- **The gap report is the expansion signal.** Regions where *no* library DBD clears the motif threshold are undesignable today; `gaps.tsv` lists them with the best near-miss DBD — the direct input to `eCR_mod_lib` expansion. With only 9 of 38 library DBDs carrying a motif (8 human, 1 mouse), expect this to be the larger output.
+
+### Output columns (`sites.tsv`)
+
+| Column | Meaning |
+|---|---|
+| `site_rank` | Rank by `design_score` (on-target × specificity) |
+| `region_id` | `chrom:start-end` of the source nomination |
+| `nomination_rank` | `rank` from `nominations.tsv` (the orderable column) |
+| `chrom`, `site_start`, `site_end` | Genomic coordinates of the emitted site (BED, + strand) |
+| `sequence` | The site → `cli.py --sequence`. Always the + strand reference at `[site_start, site_end)` |
+| `strand` | Strand the DBD's motif reads on (`+` / `−`) |
+| `motif_start`, `motif_end` | The PWM hit inside the site |
+| `gene_name`, `module_id`, `jaspar_id` | Library DBD that motivated the site |
+| `motif_score` | On-target PWM strength (−1 to 1) |
+| `n_offtarget_sites`, `offtarget_effect_score` | Per-DBD burden, joined from `--offtarget` |
+| `specificity` | Library-relative rescaling of the burden (0–1) |
+| `design_score` | `motif_score × specificity` — convenience sort only |
+| `pareto_optimal` | On the (on-target ↑, burden ↓) Pareto front |
+| `direction` | Carried verbatim from the bundle (empty = unmeasured) |
+| `ed_class` | `activator` / `repressor` / `ambiguous` / `unmeasured` |
+
+---
+
 ## Step 1 — Predict
 
 ```bash
@@ -66,7 +127,7 @@ python cli.py \
 | `query_species_match` | `exact` — direct match; `other` — genus-level fallback |
 | `tf_family` | Transcription factor family / subtype |
 | `validation_level` | Raw curation level from the library |
-| `motif_score` | Normalized PWM log-odds score (−1 to 1); `NA` if no JASPAR motif |
+| `motif_score` | Normalized PWM log-odds score (−1 to 1), best of both strands; `NA` if no JASPAR motif |
 | `annotation_confidence` | `high` / `medium` / `low` derived from `validation_level` |
 | `jaspar_id` | JASPAR motif ID if available |
 | `sequence_aa` | DBD amino acid sequence (only with `--include-sequence`) |
@@ -340,8 +401,16 @@ python offtarget.py --peaks MEF=MEF.e7_peaks.bed mES=mES.e7_peaks.bed \
 ```
 
 **Two-tier severity weighting** — the score is Σ over off-target sites of (site strength × region weight):
-- **Tier 1 (now):** region weight from accessibility *dynamics* — regions that **open** (target-state only) or **close** (start-state only) during the transition outweigh **shared/constitutive** background (default 1.0 / 1.0 / 0.3). A provisional proxy for driver importance, derived from the peak sets alone.
-- **Tier 2 (later):** swap in per-region driver weights from **eCR_navigator** through the same weight interface — the scoring code does not change, only the weight source.
+- **Tier 1 (default):** region weight from accessibility *dynamics* — regions that **open** (target-state only) or **close** (start-state only) during the transition outweigh **shared/constitutive** background (default 1.0 / 1.0 / 0.3). A provisional proxy for driver importance, derived from the peak sets alone.
+- **Tier 2 (`--weights weights.tsv`):** swap in per-region driver weights from an **eCR_navigator** run bundle. Pass the bundle's `weights.tsv`; each off-target region takes the max `driver_score` of the navigator rows it overlaps, falling back to its Tier-1 dynamics weight where the bundle has no coverage. The scoring code is unchanged — only the weight source:
+  ```bash
+  python offtarget.py \
+    --peaks MEF=MEF.e7_peaks.bed mES=mES.e7_peaks.bed --from MEF --to mES \
+    --genome /path/to/mm10.fa --dbd-input predictions.tsv \
+    --weights ../eCR_navigator/examples/run_bundle/<run>/weights.tsv \
+    --output offtarget.tsv
+  ```
+  The `weights.tsv` assembly must also match the peak coordinates. This is the same `offtarget.tsv` that `target.py --offtarget` consumes, so running it with `--weights` makes the specificity axis navigator-driver-weighted.
 
 | Output column | Meaning |
 |---|---|
@@ -349,7 +418,7 @@ python offtarget.py --peaks MEF=MEF.e7_peaks.bed mES=mES.e7_peaks.bed \
 | `offtarget_effect_score` | Σ (site strength × region weight) — severity-weighted |
 | `offtarget_unweighted` | Σ site strength (weights ignored) — for comparison |
 
-The genome FASTA assembly **must match the peak coordinates** (e.g. mm10). DBDs without a JASPAR motif return `NA`. Reuses the Step-1 PWM core (`scan.fetch_pwm` / `scan.best_site_score`).
+The genome FASTA assembly **must match the peak coordinates** (e.g. mm10). DBDs without a JASPAR motif return `NA`. Reuses the Step-1 PWM core (`scan.fetch_pwm` / `scan.best_site_score`), which scans both strands.
 
 ---
 
@@ -412,7 +481,9 @@ af3:
 ECR_predictor/
 ├── ecr_predictor/
 │   ├── query.py          # DBD lookup + species matching
-│   ├── scan.py           # JASPAR PWM scanning (parallel fetch)
+│   ├── scan.py           # JASPAR PWM scanning, both strands (parallel fetch)
+│   ├── target.py         # region → binding site (consumes eCR_navigator bundle)
+│   ├── offtarget.py      # DBD off-target / specificity screen (Tier-1/Tier-2)
 │   ├── score.py          # validation_level → annotation_confidence
 │   ├── output.py         # table formatting and TSV output
 │   ├── prefetch.py       # pre-download JASPAR motifs to local cache
@@ -420,11 +491,15 @@ ECR_predictor/
 │   ├── fimo.py           # FIMO validation (JASPAR → MEME format + fimo call)
 │   ├── af3.py            # AF3 prediction (local / hpcc / online backends)
 │   ├── foldx.py          # FoldX affinity estimation
+│   ├── fusion/           # Step 3 fusion-design developability gates
 │   └── config.py         # load/validate config.yaml
 ├── jaspar_cache/          # populated by server_setup.sh (gitignored)
 ├── af3_outputs/           # AF3 inputs, CIF outputs, run_log.json (gitignored)
+├── target.py              # Step 0 entrypoint (region → site)
 ├── cli.py                 # Step 1 entrypoint
 ├── refine.py              # Step 2 entrypoint
+├── fuse.py                # Step 3 entrypoint (fusion-design developability)
+├── offtarget.py           # off-target evaluation entrypoint
 ├── config.example.yaml    # config template
 ├── environment.yml        # shared conda environment
 ├── server_setup.sh        # one-time server setup
@@ -439,6 +514,7 @@ All managed via `environment.yml`:
 
 - [eCR_mod_lib](https://github.com/JimYuhaoWu/eCR_mod_lib) — sibling editable install
 - [biopython](https://biopython.org/) — JASPAR PWM scoring
+- [pyfaidx](https://github.com/mdshw5/pyfaidx) — genome FASTA extraction (`target.py`, `offtarget.py`)
 - [pandas](https://pandas.pydata.org/)
 - [requests](https://requests.readthedocs.io/)
 - [paramiko](https://www.paramiko.org/) — SSH/SFTP for HPCC backend
