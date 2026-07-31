@@ -300,6 +300,26 @@ The client POSTs the job payload to `url`, then polls `url/<job_id>` until the s
 
 ---
 
+## Step 4 — Preview (post-eCR accessibility)
+
+`preview.py` is a read-only reporting stage: after the design chain it renders a
+**self-contained, interactive HTML** of the predicted post-eCR chromatin accessibility —
+`measured start -> predicted (model) -> measured end` — with a live efficacy slider. The
+predicted column is a transparent direct-effect interpolation
+(`start + efficacy*(end - start)`, targeted regions only), flanked by the two measured
+endpoints; no HPCC/external tools.
+
+```bash
+python preview.py \
+  --bundle ../eCR_navigator/examples/run_bundle/<run> \
+  --atpm   atpm_union.tsv \
+  --output accessibility_preview.html
+```
+
+Accessibility resolves `--atpm` > `<bundle>/accessibility.tsv` > error. Optional `--genes` /
+`--highlight` / `--annot` add gene labels, per-locus construct cards, and a flag column. Full
+input/output contract: [docs/preview_contract.md](docs/preview_contract.md).
+
 ## Off-target evaluation (`offtarget.py`)
 
 A DBD-level **specificity** screen. For each DBD's JASPAR motif, scan the *accessible* genomic regions of the reprogramming trajectory for unintended strong binding sites and summarize them as an **off-target effect score**. A TF can only bind open chromatin, so the background is the **union of accessibility peaks across states** (e.g. MEF ∪ mES ATAC peaks), not the whole genome.

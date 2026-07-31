@@ -97,21 +97,10 @@ def _fetch_all_parallel(jaspar_ids: list) -> dict:
     return cache
 
 
-def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
-    """
-    Return the maximum log-odds score of a motif scanned against the sequence,
-    normalized to [-1, 1] by the theoretical maximum.
-
-    If the sequence is shorter than the motif, we slide the sequence against
-    every sub-window of the PSSM of length len(seq) and take the best score.
-    This captures cases where the input overlaps the binding site core.
-    """
-    seq = Seq(sequence.upper())
-    n, m = len(seq), len(motif)
-
-    pwm = motif.counts.normalize(pseudocounts=0.5)
-    pssm = pwm.log_odds()
-
+def _strand_score(pssm, seq: "Seq", n: int, m: int) -> float:
+    """Best normalized log-odds of `pssm` over `seq`, in the PSSM's own
+    orientation. Factored out of _log_odds_score so each strand is scored the
+    same way; the caller supplies the forward and reverse-complement PSSMs."""
     if n >= m:
         # Standard case: slide motif over sequence
         scores = list(np.atleast_1d(pssm.calculate(seq)))
@@ -144,6 +133,38 @@ def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
     return raw_max / max_possible
 
 
+def _log_odds_score(motif: "motifs.Motif", sequence: str) -> float:
+    """
+    Return the maximum log-odds score of a motif scanned against the sequence,
+    normalized to [-1, 1] by the theoretical maximum.
+
+    BOTH strands are scanned and the better hit wins. A TF binds double-stranded
+    DNA, so a motif occurrence on the reverse strand is a real binding site: a
+    forward-only scan scores a perfect reverse-strand site near its WORST
+    (measured: -0.49 for a site whose true score is 1.0), which reads as a
+    non-binder. AF3 folds the query as a base-paired duplex (af3.py chain B sense
+    / chain C revcomp), so both strands are physically present in what we build.
+
+    If the sequence is shorter than the motif, we slide the sequence against
+    every sub-window of the PSSM of length len(seq) and take the best score.
+    This captures cases where the input overlaps the binding site core.
+    """
+    seq = Seq(sequence.upper())
+    n, m = len(seq), len(motif)
+
+    pwm = motif.counts.normalize(pseudocounts=0.5)
+    pssm = pwm.log_odds()
+
+    best = float("nan")
+    for p in (pssm, pssm.reverse_complement()):
+        score = _strand_score(p, seq, n, m)
+        if math.isnan(score):
+            continue
+        if math.isnan(best) or score > best:
+            best = score
+    return best
+
+
 # ---------------------------------------------------------------------------
 # Public PWM core — shared by Step-1 scanning and the off-target module
 # (ecr_predictor.offtarget). Kept as thin public wrappers so callers don't reach
@@ -156,9 +177,48 @@ def fetch_pwm(jaspar_id: str) -> "motifs.Motif | None":
 
 
 def best_site_score(motif: "motifs.Motif", sequence: str) -> float:
-    """Normalized max log-odds ([-1, 1]) of `motif` over `sequence` — the strength
-    of the strongest binding site in the sequence (NaN if unscorable)."""
+    """Normalized max log-odds ([-1, 1]) of `motif` over `sequence` on either
+    strand — the strength of the strongest binding site in the sequence (NaN if
+    unscorable)."""
     return _log_odds_score(motif, sequence)
+
+
+def best_site_hit(motif: "motifs.Motif", sequence: str):
+    """Locate the strongest binding site of `motif` in `sequence`, either strand.
+
+    Returns (score, offset, strand): `score` on the same normalized [-1, 1] scale
+    as best_site_score; `offset` the 0-based start of the hit within `sequence`
+    (the hit spans offset .. offset+len(motif) on either strand); `strand` '+'/'-'.
+    None if the sequence is shorter than the motif, or nothing is scorable.
+
+    Same scan as best_site_score, but reports WHERE the hit is and on which
+    strand — best_site_score returns the strength alone.
+    """
+    seq = Seq(sequence.upper())
+    m = len(motif)
+    if len(seq) < m:
+        return None
+
+    pssm = motif.counts.normalize(pseudocounts=0.5).log_odds()
+    max_possible = sum(max(pssm[nt][i] for nt in "ACGT") for i in range(m))
+    if max_possible <= 0:
+        return None
+
+    best: tuple[float, int, str] | None = None
+    for strand, p in (("+", pssm), ("-", pssm.reverse_complement())):
+        scores = np.atleast_1d(p.calculate(seq))
+        if scores.size == 0 or bool(np.all(np.isnan(scores))):
+            continue
+        i = int(np.nanargmax(scores))
+        val = float(scores[i])
+        if math.isinf(val):
+            continue
+        if best is None or val > best[0]:
+            best = (val, i, strand)
+
+    if best is None:
+        return None
+    return best[0] / max_possible, best[1], best[2]
 
 
 def score_dbds(dbds: pd.DataFrame, sequence: str) -> pd.Series:

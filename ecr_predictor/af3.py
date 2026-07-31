@@ -333,19 +333,43 @@ def _run_cmd(client, cmd: str) -> tuple[str, str, int]:
 
 
 def _sftp_put(client, local: Path, remote: str) -> None:
-    """Upload a single file via SFTP."""
-    with client.open_sftp() as sftp:
-        sftp.put(str(local), remote)
+    """Upload a single file to the HPCC.
+
+    Tries the SFTP subsystem first; if it is unavailable (some HPCC login nodes
+    break or disable the `sftp` subsystem while ssh-exec still works -- paramiko
+    then raises SSHException 'EOF during negotiation' at open_sftp), fall back to
+    an exec-channel transfer over the already-authenticated session.
+    """
+    try:
+        with client.open_sftp() as sftp:
+            sftp.put(str(local), remote)
+    except Exception as sftp_err:
+        try:
+            _exec_put(client, local, remote)
+        except Exception as exec_err:
+            raise RuntimeError(
+                f"upload of {remote} failed via both SFTP ({sftp_err}) and "
+                f"exec channel ({exec_err})"
+            ) from exec_err
 
 
 def _sftp_get_dir(client, remote: str, local: Path) -> None:
     """
-    Recursively download a remote directory via SFTP.
-    Creates local directory structure as needed.
+    Recursively download a remote directory. Tries SFTP, falls back to the
+    exec channel if the SFTP subsystem is unavailable (see _sftp_put).
     """
     local.mkdir(parents=True, exist_ok=True)
-    with client.open_sftp() as sftp:
-        _sftp_get_recursive(sftp, remote, local)
+    try:
+        with client.open_sftp() as sftp:
+            _sftp_get_recursive(sftp, remote, local)
+    except Exception as sftp_err:
+        try:
+            _exec_get_dir(client, remote, local)
+        except Exception as exec_err:
+            raise RuntimeError(
+                f"download of {remote} failed via both SFTP ({sftp_err}) and "
+                f"exec channel ({exec_err})"
+            ) from exec_err
 
 
 def _sftp_get_recursive(sftp, remote: str, local: Path) -> None:
@@ -358,6 +382,48 @@ def _sftp_get_recursive(sftp, remote: str, local: Path) -> None:
             _sftp_get_recursive(sftp, remote_path, local_path)
         else:
             sftp.get(remote_path, str(local_path))
+
+
+# --- exec-channel transfer fallback (HPCC SFTP subsystem down; ssh-exec still works) ---
+
+def _exec_put(client, local: Path, remote: str) -> None:
+    """Upload a file over the ssh exec channel: base64 the bytes into `base64 -d`."""
+    import base64
+    import shlex
+    b64 = base64.b64encode(Path(local).read_bytes()).decode("ascii")
+    rq = shlex.quote(remote)
+    stdin, stdout, stderr = client.exec_command(
+        f'mkdir -p "$(dirname {rq})" && base64 -d > {rq}'
+    )
+    stdin.write(b64)
+    stdin.flush()
+    stdin.channel.shutdown_write()
+    rc = stdout.channel.recv_exit_status()
+    if rc != 0:
+        raise RuntimeError(f"exec upload rc={rc}: {stderr.read().decode()}")
+
+
+def _exec_get_dir(client, remote: str, local: Path) -> None:
+    """Download a remote directory over the ssh exec channel (find + base64 per file)."""
+    import posixpath
+    import shlex
+    local.mkdir(parents=True, exist_ok=True)
+    out, err, rc = _run_cmd(client, f"find {shlex.quote(remote)} -type f")
+    if rc != 0:
+        raise RuntimeError(f"exec listing of {remote} rc={rc}: {err}")
+    for rf in (l.strip() for l in out.splitlines() if l.strip()):
+        local_path = local / posixpath.relpath(rf, remote)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        _exec_get_file(client, rf, local_path)
+
+
+def _exec_get_file(client, remote: str, local: Path) -> None:
+    import base64
+    import shlex
+    out, err, rc = _run_cmd(client, f"base64 {shlex.quote(remote)}")
+    if rc != 0:
+        raise RuntimeError(f"exec download of {remote} rc={rc}: {err}")
+    Path(local).write_bytes(base64.b64decode(out))
 
 
 def _submit_slurm_job(

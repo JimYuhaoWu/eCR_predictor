@@ -14,6 +14,7 @@ Three-stage CLI pipeline:
 1. **`cli.py`** — predicts which DBDs from `eCR_mod_lib` are likely to bind a query DNA sequence. Returns a ranked TSV with two independent confidence scores.
 2. **`refine.py`** — filters, FIMO-validates, runs AF3 structure prediction, and estimates binding affinity with FoldX.
 3. **`fuse.py`** — assembles DBD + linker + ED fusion candidates and screens them for developability liabilities (MHC-I junction immunogenicity, aggregation, stability) before wet-lab synthesis. Target modality: intracellular expression (viral vector / mRNA).
+4. **`preview.py`** — (optional, read-only) renders a self-contained interactive HTML of predicted post-eCR chromatin accessibility (`measured start → model → measured end`, live efficacy slider). Contract: `docs/preview_contract.md`.
 
 ## Repo layout
 
@@ -50,6 +51,7 @@ ECR_predictor/
 ├── refine.py              # Step 2 entrypoint
 ├── fuse.py                # Step 3 entrypoint (fusion-design developability)
 ├── offtarget.py           # off-target evaluation entrypoint (DBD specificity)
+├── preview.py             # Step 4 entrypoint (post-eCR accessibility preview)
 ├── config.example.yaml    # config template — copy to config.yaml and edit
 ├── environment.yml        # shared conda environment (covers both repos)
 ├── server_setup.sh        # one-time server setup (install + seed DB + prefetch)

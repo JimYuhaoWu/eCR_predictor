@@ -1,12 +1,35 @@
-*.db
-*.egg-info/
-af3_outputs/
+# Python
 *.py[cod]
-.eggs/
-.env
 __pycache__/
+*.egg-info/
+.eggs/
 build/
-config.yaml
-data/proteomes/
 dist/
+.env
+
+# Secrets / config — keep ONLY the committed template
+config*.yaml
+!config.example.yaml
+
+# Databases / caches / large regenerable assets
+*.db
 jaspar_cache/
+data/proteomes/
+
+# Pipeline run outputs (transient)
+af3_outputs/
+foldx_work/
+molecules/
+*.bak
+*.bak_*
+predictions.tsv
+predictions_refined.tsv
+results.tsv
+test_pred.tsv
+offtarget_test.tsv
+union_regions.bed
+Unrecognized_molecules.txt
+
+# Per-run working directories (large data: bigWigs, tarballs, AF3 outputs, structures)
+mef_mes_engineer/
+mef_mes_testrun/

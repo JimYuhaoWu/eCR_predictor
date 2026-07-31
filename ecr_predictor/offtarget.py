@@ -25,6 +25,7 @@ genome, so the background set can be built/inspected independently.
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import sys
 from dataclasses import dataclass
@@ -165,6 +166,71 @@ def extract_sequences(regions: list[Region], genome_fasta: str | Path) -> dict[s
 
 
 # ---------------------------------------------------------------------------
+# Tier-2 severity weights (eCR_navigator region-weight contract)
+# ---------------------------------------------------------------------------
+
+def _load_weight_index(path: str | Path) -> dict:
+    """{chrom: (starts, rows, max_len)} from the navigator's region-weight
+    contract TSV (weights.tsv). Both the 4-column form and the 5-column
+    (+direction) form parse — `direction` is open-vs-close, not a severity, so it
+    is ignored here. `rows` is sorted by start; `max_len` bounds the backward scan
+    in weights_weight_fn."""
+    by_chrom: dict[str, list[tuple[int, int, float]]] = {}
+    with open(path, newline="") as fh:
+        reader = csv.DictReader(fh, delimiter="\t")
+        for row in reader:
+            by_chrom.setdefault(row["chrom"], []).append(
+                (int(row["start"]), int(row["end"]), float(row["driver_score"]))
+            )
+    index: dict = {}
+    for chrom, rows in by_chrom.items():
+        rows.sort()
+        index[chrom] = ([r[0] for r in rows], rows,
+                        max(r[1] - r[0] for r in rows))
+    return index
+
+
+def weights_weight_fn(path: str | Path, default_fn=None):
+    """Build a Tier-2 `weight_fn(region) -> float` from an eCR_navigator
+    weights.tsv — the same interface score_offtarget already takes, so the
+    scoring loop does not change; only the weight source does.
+
+    The region's severity becomes the navigator's `driver_score` instead of the
+    Tier-1 dynamics weight. Where several scored rows overlap a region we take
+    the MAX (conservative for a severity weight); where none do, we fall back to
+    `default_fn` — the region's Tier-1 dynamics weight, per
+    region_weight_contract.md ("Any eCR_predictor region with no overlap here
+    falls back to a default weight").
+
+    The weights.tsv assembly MUST match the peak coordinates; mismatched
+    coordinates silently corrupt the weighting (they read as no-overlap and every
+    region quietly falls back to Tier 1).
+    """
+    index = _load_weight_index(path)
+    if default_fn is None:
+        default_fn = lambda r: r.weight
+
+    def weight_fn(region: Region) -> float:
+        entry = index.get(region.chrom)
+        if entry is None:
+            return default_fn(region)
+        starts, rows, max_len = entry
+        # Every row before `hi` starts before region.end; a row can only reach
+        # region.start if it starts within max_len of it.
+        hi = bisect.bisect_left(starts, region.end)
+        best: float | None = None
+        for j in range(hi - 1, -1, -1):
+            s, e, score = rows[j]
+            if s < region.start - max_len:
+                break
+            if e > region.start:
+                best = score if best is None else max(best, score)
+        return best if best is not None else default_fn(region)
+
+    return weight_fn
+
+
+# ---------------------------------------------------------------------------
 # Off-target scoring (reuses ecr_predictor.scan PWM core)
 # ---------------------------------------------------------------------------
 
@@ -252,6 +318,10 @@ def _parse_args(argv):
     p.add_argument("--to", dest="to_state", required=True,
                    help="State label of the target cell type (e.g. mES).")
     p.add_argument("--genome", help="Genome FASTA matching the peak assembly (e.g. mm10.fa).")
+    p.add_argument("--weights",
+                   help="Tier-2 severity weights: an eCR_navigator weights.tsv "
+                        "(region-weight contract). Regions it does not cover keep "
+                        "their Tier-1 dynamics weight. Default: Tier 1 only.")
     p.add_argument("--output", default="offtarget.tsv", help="Output TSV path.")
     p.add_argument("--regions-out", help="Optional path to dump the union region BED.")
     p.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
@@ -291,8 +361,14 @@ def main(argv: list[str] | None = None) -> None:
     print(f"[offtarget] Extracting region sequences from {args.genome}...", file=sys.stderr)
     sequences = extract_sequences(regions, args.genome)
 
+    weight_fn = None
+    if args.weights:
+        weight_fn = weights_weight_fn(args.weights)
+        print(f"[offtarget] Tier-2 severity weights from {args.weights}.", file=sys.stderr)
+
     dbds = _read_dbd_input(args.dbd_input)
-    print(f"[offtarget] Scoring {len(dbds)} DBDs (threshold {args.threshold})...",
+    tier = "Tier 2" if args.weights else "Tier 1"
+    print(f"[offtarget] Scoring {len(dbds)} DBDs (threshold {args.threshold}, {tier})...",
           file=sys.stderr)
 
     cache: dict[str, dict | None] = {}
@@ -305,7 +381,8 @@ def main(argv: list[str] | None = None) -> None:
                 writer.writerow([gene, "", "NA", "NA", "NA"])
                 continue
             if jid not in cache:
-                cache[jid] = score_offtarget(jid, regions, sequences, args.threshold)
+                cache[jid] = score_offtarget(jid, regions, sequences, args.threshold,
+                                             weight_fn=weight_fn)
             res = cache[jid]
             if res is None:
                 writer.writerow([gene, jid, "NA", "NA", "NA"])
