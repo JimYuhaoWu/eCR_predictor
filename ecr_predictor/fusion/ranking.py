@@ -73,7 +73,11 @@ def build_score_table(
 
 # Full axis set. The sequence-only phase ranks on a subset (no structure yet).
 ALL_AXES = ["immuno_density", "aggregation_risk", "stability_risk"]
-SEQUENCE_AXES = ["immuno_density", "stability_risk"]
+# Aggregation belongs here too: its scorer has a sequence-only mode, so all three
+# axes are measurable before any structure exists. Structure does not add the
+# axis, it improves it (per-residue SASA weighting), and the prune must not be
+# blind to a liability it is capable of measuring.
+SEQUENCE_AXES = ["immuno_density", "aggregation_risk", "stability_risk"]
 
 
 def _dominates(a: dict, b: dict, axes: list[str]) -> bool:

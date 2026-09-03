@@ -16,7 +16,8 @@ STRUCTURE phase (AF3 fold + FoldX) for the handful that remain.
   [4] structure  AF3 fold survivors + FoldX ΔΔG (function) + Gate 2 aggregation
   [5] score      final composite risk + Pareto ranking
 
-DBDs are read from a TSV with gene_name + sequence_aa (Step-1/2 output).
+DBDs are read from a TSV with gene_name + dbd_sequence_aa (the extracted DNA-binding
+span; falls back to sequence_aa with a warning) -- Step-1/2 output.
 EDs are read from the eCR_mod_lib library (type='ED'). Linkers and tool backends
 come from config.yaml (fusion section).
 
@@ -40,7 +41,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         description="Assemble and screen DBD–ED fusion candidates."
     )
     p.add_argument("--dbd-input", required=True,
-                   help="TSV with gene_name + sequence_aa columns (Step 1/2 output).")
+                   help="TSV with gene_name + dbd_sequence_aa (preferred) or "
+                        "sequence_aa columns (Step 1/2 output).")
     p.add_argument("--dbd", default=None,
                    help="Comma-separated gene_name subset to use as DBDs (default: all).")
     p.add_argument("--ed", default=None,
@@ -76,20 +78,47 @@ def _load_dbds(input_path: Path, subset: str | None) -> tuple[dict[str, str], di
         wanted = {s.strip() for s in subset.split(",")}
         df = df[df["gene_name"].isin(wanted)]
 
+    # eCR_mod_lib stores the WHOLE UniProt protein in sequence_aa, so fusing on
+    # that column builds a full-length-TF fusion carrying every native domain --
+    # including KRAB on a construct meant to open chromatin. dbd_sequence_aa is
+    # the extracted DNA-binding span (06_extract_dbd.py); prefer it, and say so
+    # loudly when a record has none rather than silently reverting.
+    has_span = "dbd_sequence_aa" in df.columns
+    fell_back: list[str] = []
+
     dbds: dict[str, str] = {}
     meta: dict[str, dict] = {}
     for _, row in df.iterrows():
         gene = str(row["gene_name"])
         if gene in dbds:
             continue
-        dbds[gene] = str(row["sequence_aa"])
+        span = str(row["dbd_sequence_aa"]) if has_span else ""
+        if span and span.lower() not in ("nan", "none", ""):
+            dbds[gene] = span
+        else:
+            fell_back.append(gene)
+            dbds[gene] = str(row["sequence_aa"])
         baseline = pd.to_numeric(row.get("foldx_ddg_kcal_mol"), errors="coerce")
         meta[gene] = {
             "tf_family": row.get("tf_family", ""),
             "zinc_finger_count": row.get("zinc_finger_count"),
             "baseline_ddg": None if pd.isna(baseline) else float(baseline),
             "species": str(row.get("species", "") or ""),
+            "dbd_extraction": row.get("dbd_extraction"),
+            "dbd_review_flag": row.get("dbd_review_flag"),
         }
+
+    if not has_span:
+        print("WARNING: --dbd-input has no 'dbd_sequence_aa' column; fusing on "
+              "FULL-LENGTH sequences. Run eCR_mod_lib scripts/06_extract_dbd.py "
+              "and re-export, or these constructs carry every native domain of "
+              "each TF.", file=sys.stderr)
+    elif fell_back:
+        print(f"WARNING: no extracted DBD span for {len(fell_back)} gene(s); "
+              f"using the full-length sequence for: "
+              f"{', '.join(sorted(fell_back)[:10])}"
+              f"{' ...' if len(fell_back) > 10 else ''}", file=sys.stderr)
+
     return dbds, meta
 
 
@@ -197,14 +226,25 @@ def main(argv: list[str] | None = None) -> None:
     # -------------------------------------------------------------------------
     # [2] Sequence gates (cheap; all candidates)
     # -------------------------------------------------------------------------
-    print("\n[2/5] Sequence gates — immunogenicity + stability...", file=sys.stderr)
+    print("\n[2/5] Sequence gates — immunogenicity + aggregation + stability...",
+          file=sys.stderr)
     from ecr_predictor.fusion.immunogenicity import screen_immunogenicity
     from ecr_predictor.fusion.stability import screen_stability
+    from ecr_predictor.fusion.aggregation import screen_aggregation
     try:
         immuno = screen_immunogenicity(candidates, fusion_cfg, proteome_blob)
     except (backends.ToolDisabled, backends.ToolNotAvailableError) as e:
         print(f"      SKIP Gate 1: {e}", file=sys.stderr)
     stability = screen_stability(candidates, fusion_cfg)
+    # Gate 2 on sequence alone, over ALL candidates. It used to run only in the
+    # structure phase, so the prune that decides who gets GPU time never saw the
+    # aggregation axis — and with --stop-after prune it reported NA throughout.
+    # The structure phase re-runs it with per-residue SASA, which is the better
+    # measurement; this is the cheap version that can actually inform pruning.
+    try:
+        aggregation = screen_aggregation(candidates, fusion_cfg, structure_paths=None)
+    except (backends.ToolDisabled, backends.ToolNotAvailableError) as e:
+        print(f"      SKIP Gate 2: {e}", file=sys.stderr)
 
     if args.stop_after == "sequence":
         _write_scores(candidates, immuno, aggregation, stability, structure, Path(args.output))
@@ -218,7 +258,7 @@ def main(argv: list[str] | None = None) -> None:
         build_score_table, add_pareto_and_rank, SEQUENCE_AXES,
     )
     seq_table = add_pareto_and_rank(
-        build_score_table(candidates, immuno, None, stability), axes=SEQUENCE_AXES,
+        build_score_table(candidates, immuno, aggregation, stability), axes=SEQUENCE_AXES,
     )
     survivor_names = _select_survivors(seq_table, args.top_n_structure)
     survivors = [c for c in candidates if c.name in survivor_names]

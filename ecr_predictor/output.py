@@ -38,7 +38,13 @@ def build_result_table(
 
     cols = _OUTPUT_COLUMNS.copy()
     if include_sequence:
-        cols = cols + ["sequence_aa", "zinc_finger_count"]
+        # dbd_sequence_aa is the DNA-binding span extracted by eCR_mod_lib's
+        # 06_extract_dbd.py; sequence_aa is the whole TF. Both are carried so a
+        # consumer can choose, and so a library predating the extraction still
+        # works -- fuse.py prefers the span and warns when it has to fall back.
+        cols = cols + ["sequence_aa", "zinc_finger_count",
+                       "dbd_sequence_aa", "dbd_start", "dbd_end",
+                       "dbd_extraction", "dbd_review_flag"]
 
     # Ensure all output columns exist
     for col in cols:
