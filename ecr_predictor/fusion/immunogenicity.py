@@ -134,15 +134,25 @@ def _parse_netmhc_stdout(stdout: str, rank_col_hint: str = "Rank") -> dict[str, 
         cols = line.split()
         if not cols:
             continue
-        if pep_idx is None and "Peptide" in cols:
-            pep_idx = cols.index("Peptide")
-            # Prefer an explicit '%Rank'/'Rank' column; fall back to last col.
-            rank_idx = next(
-                (i for i, c in enumerate(cols) if rank_col_hint in c or c.startswith("%Rank")),
-                len(cols) - 1,
-            )
+        # Skip comments/rules BEFORE looking for the header. NetMHCpan echoes its
+        # option list first, and one of those lines is
+        #   #  [-l filename]  9  Peptide length (multiple length with ,) ...
+        # which contains the bare token 'Peptide'. Testing for the header first
+        # latched onto it (pep_idx=4, rank_idx=last), and every real data row was
+        # then dropped by the column-count guard — the parser returned {} and the
+        # gate scored on nothing.
+        if line.startswith("#") or line.startswith("-"):
             continue
-        if pep_idx is None or line.startswith("#") or line.startswith("-"):
+        # A real header names the peptide column AND a rank column; requiring both
+        # stops a stray 'Peptide' token from being mistaken for the table head.
+        rank_hit = next(
+            (i for i, c in enumerate(cols) if rank_col_hint in c or c.startswith("%Rank")),
+            None,
+        )
+        if "Peptide" in cols and rank_hit is not None:
+            pep_idx, rank_idx = cols.index("Peptide"), rank_hit
+            continue
+        if pep_idx is None:
             continue
         if len(cols) <= max(pep_idx, rank_idx):
             continue
