@@ -220,19 +220,30 @@ def ed_class(direction: float | None, direction_min: float) -> str:
     return "activator" if direction > 0 else "repressor"
 
 
-def compute_specificity(burdens: dict[str, float]) -> dict[str, float]:
-    """{jaspar_id: specificity in (0,1]} — 1/(1 + burden/scale), where scale is
-    the median positive burden across the library DBDs in THIS run.
+def compute_specificity(burdens: dict[str, float],
+                        scale: float | None = None) -> tuple[dict[str, float], float]:
+    """({jaspar_id: specificity in (0,1]}, scale) — 1/(1 + burden/scale).
 
-    Specificity is therefore library-relative, not absolute: it says which of
-    your DBDs is cleaner, not that any of them is clean. Scale-free (the burden's
-    absolute units cancel) and never degenerate — the worst DBD in the library
-    still gets a positive weight rather than being annihilated in design_score."""
+    Specificity is library-relative, not absolute: it says which of your DBDs is
+    cleaner, not that any of them is clean. Scale-free (the burden's absolute
+    units cancel) and never degenerate — the worst DBD in the library still gets
+    a positive weight rather than being annihilated in design_score.
+
+    `scale` defaults to the median positive burden across the DBDs in THIS run,
+    which makes design_score incomparable between runs whenever the library
+    changes: adding motifs moves the median, so every existing DBD's specificity
+    and design_score shift and the Pareto front reshuffles even though no
+    burden moved. Pass an explicit `scale` (echoed by every run, and recorded in
+    the output header) to hold rankings comparable across library versions.
+    Returns the scale actually used so the caller can record it."""
     positive = [b for b in burdens.values() if b > 0]
-    if not positive:
-        return {jid: 1.0 for jid in burdens}
-    scale = statistics.median(positive)
-    return {jid: 1.0 / (1.0 + b / scale) for jid, b in burdens.items()}
+    if scale is None:
+        if not positive:
+            return {jid: 1.0 for jid in burdens}, 0.0
+        scale = statistics.median(positive)
+    if scale <= 0:
+        return {jid: 1.0 for jid in burdens}, scale
+    return {jid: 1.0 / (1.0 + b / scale) for jid, b in burdens.items()}, scale
 
 
 def mark_pareto(sites: list[Site]) -> None:
@@ -344,6 +355,12 @@ def _parse_args(argv):
     p.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD,
                    help=f"Normalized log-odds bound-site threshold (default "
                         f"{DEFAULT_THRESHOLD}); same scale as motif_score.")
+    p.add_argument("--specificity-scale", type=float,
+                   help="Burden scale for specificity = 1/(1 + burden/scale). "
+                        "Default: the median positive burden in THIS run, which "
+                        "shifts every design_score whenever the library changes. "
+                        "Pin it to the value a previous run reported to keep "
+                        "rankings comparable across library versions.")
     p.add_argument("--direction-min", type=float, default=DEFAULT_DIRECTION_MIN,
                    help=f"|direction| below this is labelled ed_class=ambiguous "
                         f"(default {DEFAULT_DIRECTION_MIN}). Labels only — no row "
@@ -470,7 +487,13 @@ def main(argv: list[str] | None = None) -> None:
                 n_offtarget_sites=n_off, burden=burden,
             ))
 
-    spec = compute_specificity({j: b for j, (_, b) in burdens.items()})
+    spec, spec_scale = compute_specificity(
+        {j: b for j, (_, b) in burdens.items()}, args.specificity_scale)
+    if burdens:
+        pinned = "pinned" if args.specificity_scale is not None else "from this run"
+        print(f"[target] Specificity scale ({pinned}): {spec_scale:.6g}. Pass "
+              f"--specificity-scale {spec_scale:.6g} to keep later runs comparable.",
+              file=sys.stderr)
     for s in sites:
         s.specificity = spec.get(s.jaspar_id)
         s.design_score = (s.motif_score * s.specificity
