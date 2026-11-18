@@ -155,11 +155,31 @@ def _write_job_jsons(
             print(f"  SKIP {gene}: no sequence_aa (re-run cli.py with --include-sequence).", file=sys.stderr)
             continue
 
-        # Add Zn ions for C2H2-type zinc-finger DBDs (one per UniProt-annotated finger)
+        # Add Zn ions for C2H2-type zinc-finger DBDs, one per finger the folded
+        # sequence actually contains. `dbd_zinc_finger_count` (eCR_mod_lib F3)
+        # counts the fingers INSIDE the extracted span and only keep-types;
+        # `zinc_finger_count` is text.count("ZN_FING") over the whole protein,
+        # so on the fusion path -- which folds the span, not the protein -- it
+        # over-counts: ZFPM2 claims 8 for a 102-aa span of a 1,151-aa protein,
+        # five of them FOG-type CCHC fingers the span does not hold. Prefer the
+        # span-local count; fall back to the protein-wide one with a warning,
+        # which is correct for refine.py (it folds the full-length TF).
         zinc_count = 0
         family = str(row.get("tf_family", "")).strip()
         if family in ZINC_FINGER_FAMILIES:
-            zinc_count = int(pd.to_numeric(row.get("zinc_finger_count"), errors="coerce") or 0)
+            span_count = pd.to_numeric(row.get("dbd_zinc_finger_count"),
+                                       errors="coerce")
+            if pd.notna(span_count):
+                zinc_count = int(span_count)
+            else:
+                zinc_count = int(pd.to_numeric(row.get("zinc_finger_count"),
+                                               errors="coerce") or 0)
+                if zinc_count:
+                    print(f"  WARNING {gene}: no dbd_zinc_finger_count; using "
+                          f"the whole-protein zinc_finger_count ({zinc_count}). "
+                          f"Correct for a full-length fold, an over-count for a "
+                          f"DBD span -- re-export from a library with "
+                          f"eCR_mod_lib F3 applied.", file=sys.stderr)
 
         job_name = gene.replace(" ", "_")
         job_input = _build_af3_json(job_name, str(protein_seq), dna_sequence, zinc_count)

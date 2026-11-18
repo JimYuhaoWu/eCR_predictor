@@ -49,8 +49,9 @@ def run_structure_phase(
     from ecr_predictor.foldx import run_foldx_affinity
 
     # Build a hits-like frame the AF3/FoldX stages understand. The fusion is the
-    # "protein"; carry the DBD's tf_family/zinc_finger_count so zinc-finger DBDs
-    # still get Zn ions in the AF3 input.
+    # "protein"; carry the DBD's tf_family and both finger counts so zinc-finger
+    # DBDs still get Zn ions in the AF3 input. af3.py prefers the span-local
+    # count (eCR_mod_lib F3) because this path folds the span, not the protein.
     rows = []
     for c in candidates:
         meta = dbd_meta.get(c.dbd_name, {})
@@ -59,6 +60,7 @@ def run_structure_phase(
             "sequence_aa": c.sequence,
             "tf_family": meta.get("tf_family", ""),
             "zinc_finger_count": meta.get("zinc_finger_count"),
+            "dbd_zinc_finger_count": meta.get("dbd_zinc_finger_count"),
         })
     df = pd.DataFrame(rows)
 
