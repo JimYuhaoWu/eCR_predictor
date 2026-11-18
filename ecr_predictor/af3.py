@@ -657,7 +657,7 @@ def _run_hpcc(
             # Download output
             job_name_lower = job_name.lower()
             local_out = output_dir / job_name_lower
-            remote_out = f"{remote_workdir}/{job_name_lower}"
+            remote_out = _resolve_remote_out(client, remote_workdir, job_name_lower)
             try:
                 _sftp_get_dir(client, remote_out, local_out)
             except Exception as e:
@@ -672,6 +672,43 @@ def _run_hpcc(
             results[job_name] = cif
 
     return results
+
+
+def _resolve_remote_out(client, remote_workdir: str, job_name_lower: str) -> str:
+    """Remote output dir for a finished job — the NEWEST one, not the bare name.
+
+    run_alphafold3.sh does not overwrite an existing output directory. Re-running
+    the same job name leaves the old results in place and writes a sibling
+    `<name>_<YYYYmmdd>_<HHMMSS>`. Downloading the bare `<name>` therefore returns
+    a PREVIOUS run's model while the current job reports completed — silent, and
+    indistinguishable from success downstream.
+
+    Not hypothetical: the fib->beta ed_n re-run (2026-09-04) retrieved the dbd_n
+    structures from 09-03 for all seven constructs, because the job name encodes
+    DBD/linker/ED but not fusion orientation. FoldX then scored the wrong models
+    and the ddG came back identical to the previous round, which is what exposed
+    it. So: list the candidates and take the most recently modified.
+    """
+    import posixpath
+    import shlex
+
+    base = f"{remote_workdir}/{job_name_lower}"
+    out, _err, _rc = _run_cmd(
+        client,
+        f"ls -1dt {shlex.quote(base)} {shlex.quote(base)}_* 2>/dev/null",
+    )
+    for line in out.splitlines():
+        cand = line.strip()
+        if not cand:
+            continue
+        if not cand.endswith("/" + job_name_lower):
+            print(
+                f"  {job_name_lower}: using timestamped output "
+                f"{posixpath.basename(cand)}",
+                file=sys.stderr,
+            )
+        return cand
+    return base
 
 
 def _now() -> str:
