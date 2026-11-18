@@ -151,6 +151,7 @@ def _load_dbds(input_path: Path, subset: str | None,
             "species": str(row.get("species", "") or ""),
             "dbd_extraction": row.get("dbd_extraction"),
             "dbd_review_flag": row.get("dbd_review_flag"),
+            "dbd_zinc_finger_count": row.get("dbd_zinc_finger_count"),
         }
 
     def _names(genes: list[str]) -> str:

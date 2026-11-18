@@ -52,7 +52,8 @@ def build_result_table(
         cols = cols + ["sequence_aa", "zinc_finger_count",
                        "dbd_sequence_aa", "dbd_start", "dbd_end",
                        "dbd_extraction", "dbd_review_flag",
-                       "dbd_dropped_regions", "dbd_dropped_review_flag"]
+                       "dbd_dropped_regions", "dbd_dropped_review_flag",
+                       "dbd_zinc_finger_count"]
 
     # Ensure all output columns exist
     for col in cols:
