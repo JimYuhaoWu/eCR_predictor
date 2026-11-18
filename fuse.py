@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import sys
 from pathlib import Path
 
@@ -148,17 +149,49 @@ def _resolve_self_proteome(
 
 
 def _load_eds(subset: str | None) -> dict[str, str]:
-    """Load effector domains (type='ED') from the eCR_mod_lib library."""
+    """Load effector domains (type='ED') from the eCR_mod_lib library.
+
+    Library ED names are not unique: a name can carry several distinct
+    sequences (1,148 of 5,530 names do), so keying on name alone kept the first
+    row reached and discarded 1,439 of 6,969 rows, with the survivor decided by
+    row order. A name carrying one sequence keeps that name as its key; a name
+    carrying several yields one key per sequence, suffixed with a short digest
+    of that sequence ("NAME~a1b2c3"), so every distinct ED reaches the design
+    run and the key is reproducible across runs and rebuilds. Rows that are
+    exact duplicates (same name and same sequence) still collapse to one.
+
+    `subset` (--ed) matches either a bare library name - selecting every
+    sequence under it - or one suffixed key, selecting just that sequence.
+    """
     from ecr_predictor.query import load_eds
     df = load_eds()
     df = df.dropna(subset=["sequence_aa"])
     name_col = "name" if "name" in df.columns else "gene_symbol"
+    by_name: dict[str, list[str]] = {}
+    for _, row in df.iterrows():
+        seqs = by_name.setdefault(str(row[name_col]), [])
+        seq = str(row["sequence_aa"])
+        if seq not in seqs:
+            seqs.append(seq)
+    eds: dict[str, str] = {}
+    for name, seqs in by_name.items():
+        if len(seqs) == 1:
+            eds[name] = seqs[0]
+            continue
+        for seq in seqs:
+            digest = hashlib.sha256(seq.encode()).hexdigest()[:6]
+            eds[f"{name}~{digest}"] = seq
     if subset:
         wanted = {s.strip() for s in subset.split(",")}
-        df = df[df[name_col].isin(wanted)]
-    eds: dict[str, str] = {}
-    for _, row in df.iterrows():
-        eds.setdefault(str(row[name_col]), str(row["sequence_aa"]))
+        eds = {k: v for k, v in eds.items()
+               if k in wanted or k.split("~", 1)[0] in wanted}
+    affected = sorted({k.split("~", 1)[0] for k in eds if "~" in k})
+    if affected:
+        shown = ", ".join(affected[:10])
+        more = f" (+{len(affected) - 10} more)" if len(affected) > 10 else ""
+        print(f"WARNING: {len(affected)} ED name(s) carry >1 distinct sequence "
+              f"in the library; each sequence is kept under its own "
+              f"'<name>~<digest>' key: {shown}{more}", file=sys.stderr)
     return eds
 
 
