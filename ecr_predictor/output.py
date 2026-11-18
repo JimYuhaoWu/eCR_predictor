@@ -42,9 +42,17 @@ def build_result_table(
         # 06_extract_dbd.py; sequence_aa is the whole TF. Both are carried so a
         # consumer can choose, and so a library predating the extraction still
         # works -- fuse.py prefers the span and warns when it has to fall back.
+        # dbd_dropped_regions / dbd_dropped_review_flag are eCR_mod_lib's F7
+        # columns: what the span extraction left out, and whether any of it
+        # reads as a self-association or repeat module. They are carried, not
+        # acted on -- over-inclusion (dbd_review_flag) and under-inclusion
+        # (dbd_dropped_review_flag) are different hazards, and only the former
+        # is a reason to refuse a chassis. A library predating F7 has neither
+        # column, and the loop below fills them with NA.
         cols = cols + ["sequence_aa", "zinc_finger_count",
                        "dbd_sequence_aa", "dbd_start", "dbd_end",
-                       "dbd_extraction", "dbd_review_flag"]
+                       "dbd_extraction", "dbd_review_flag",
+                       "dbd_dropped_regions", "dbd_dropped_review_flag"]
 
     # Ensure all output columns exist
     for col in cols:
