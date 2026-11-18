@@ -55,6 +55,17 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
                         '"Homo sapiens" (same style as cli.py). Default: auto-detected '
                         "from the --dbd-input 'species' column. Resolves to "
                         "data/proteomes/<slug>.fasta.")
+    p.add_argument("--allow-fulllength-dbd", action="store_true",
+                   help="Fuse on the full-length protein for records with no "
+                        "extracted DBD span, instead of skipping them. Builds "
+                        "constructs carrying every native domain of the TF -- "
+                        "including KRAB on an opener.")
+    p.add_argument("--allow-flagged-dbd", action="store_true",
+                   help="Use spans with dbd_review_flag=1 (an excluded domain "
+                        "lies inside the kept span) instead of skipping them. "
+                        "Some flags are conservative: for REST, YY1, FOS and "
+                        "HINFP the flagged region is itself required for "
+                        "binding.")
     p.add_argument("--config", default=None, help="Path to config.yaml.")
     p.add_argument("--output", default="fusion_candidates.tsv", help="Output TSV path.")
     p.add_argument("--top-n-structure", type=int, default=10,
@@ -66,9 +77,30 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     return p.parse_args(argv)
 
 
-def _load_dbds(input_path: Path, subset: str | None) -> tuple[dict[str, str], dict[str, dict]]:
+def _load_dbds(input_path: Path, subset: str | None,
+               allow_fulllength: bool = False,
+               allow_flagged: bool = False) -> tuple[dict[str, str], dict[str, dict]]:
     """Return ({gene: sequence}, {gene: meta}) where meta carries tf_family,
-    zinc_finger_count, and a FoldX baseline ΔΔG if present in the TSV."""
+    zinc_finger_count, and a FoldX baseline ΔΔG if present in the TSV.
+
+    Two classes of record are REFUSED rather than used (F1 in
+    eCR_mod_lib/docs/DBD_EXTRACTION_FIXES.md), each with its own override
+    because they are different decisions:
+
+    - **No extracted span.** 692 of the library's 3,248 DBD records have no
+      `dbd_sequence_aa` -- 262 where the extraction abstained, 430 never
+      attempted -- and every one of them used to fall through to a full-length
+      fusion here. That is the KRAB self-antagonism `06_extract_dbd.py` exists
+      to prevent: the fib->beta run selected ZNF793 and ZNF850 as OPENERS while
+      both carry native KRAB domains, so the construct opens and silences the
+      same locus. `--allow-fulllength-dbd` restores the old behaviour.
+    - **`dbd_review_flag == 1`.** 287 records where an excluded domain overlaps
+      the kept span -- ZNF541 and TRERF1 carry ELM2 (NuRD recruiters, i.e.
+      unintended closers). `--allow-flagged-dbd` uses them anyway.
+
+    `dbd_dropped_review_flag` (F7, under-inclusion) is deliberately NOT a
+    refusal: dropping a module is a biology question the design is meant to
+    answer, not a construct that contradicts itself."""
     df = pd.read_csv(input_path, sep="\t", dtype=str)
     if "sequence_aa" not in df.columns:
         print("ERROR: --dbd-input needs a 'sequence_aa' column "
@@ -85,20 +117,32 @@ def _load_dbds(input_path: Path, subset: str | None) -> tuple[dict[str, str], di
     # the extracted DNA-binding span (06_extract_dbd.py); prefer it, and say so
     # loudly when a record has none rather than silently reverting.
     has_span = "dbd_sequence_aa" in df.columns
-    fell_back: list[str] = []
+    fell_back: list[str] = []      # no span: used full-length under the override
+    skipped_nospan: list[str] = []  # no span: refused
+    used_flagged: list[str] = []    # flagged span: used under the override
+    skipped_flagged: list[str] = []  # flagged span: refused
 
     dbds: dict[str, str] = {}
     meta: dict[str, dict] = {}
     for _, row in df.iterrows():
         gene = str(row["gene_name"])
-        if gene in dbds:
+        if gene in dbds or gene in skipped_nospan or gene in skipped_flagged:
             continue
         span = str(row["dbd_sequence_aa"]) if has_span else ""
+        flagged = pd.to_numeric(row.get("dbd_review_flag"), errors="coerce") == 1
         if span and span.lower() not in ("nan", "none", ""):
+            if flagged and not allow_flagged:
+                skipped_flagged.append(gene)
+                continue
+            if flagged:
+                used_flagged.append(gene)
             dbds[gene] = span
-        else:
+        elif allow_fulllength:
             fell_back.append(gene)
             dbds[gene] = str(row["sequence_aa"])
+        else:
+            skipped_nospan.append(gene)
+            continue
         baseline = pd.to_numeric(row.get("foldx_ddg_kcal_mol"), errors="coerce")
         meta[gene] = {
             "tf_family": row.get("tf_family", ""),
@@ -109,16 +153,51 @@ def _load_dbds(input_path: Path, subset: str | None) -> tuple[dict[str, str], di
             "dbd_review_flag": row.get("dbd_review_flag"),
         }
 
+    def _names(genes: list[str]) -> str:
+        shown = ", ".join(sorted(genes)[:10])
+        return f"{shown}{' ...' if len(genes) > 10 else ''}"
+
+    if not has_span and not allow_fulllength:
+        print("ERROR: --dbd-input has no 'dbd_sequence_aa' column, so every "
+              "record would be fused on its FULL-LENGTH protein -- every native "
+              "domain of each TF, KRAB included. Run eCR_mod_lib "
+              "scripts/06_extract_dbd.py and re-export with --include-sequence, "
+              "or pass --allow-fulllength-dbd to accept that.", file=sys.stderr)
+        sys.exit(1)
     if not has_span:
         print("WARNING: --dbd-input has no 'dbd_sequence_aa' column; fusing on "
-              "FULL-LENGTH sequences. Run eCR_mod_lib scripts/06_extract_dbd.py "
-              "and re-export, or these constructs carry every native domain of "
-              "each TF.", file=sys.stderr)
+              "FULL-LENGTH sequences (--allow-fulllength-dbd). These constructs "
+              "carry every native domain of each TF.", file=sys.stderr)
     elif fell_back:
         print(f"WARNING: no extracted DBD span for {len(fell_back)} gene(s); "
-              f"using the full-length sequence for: "
-              f"{', '.join(sorted(fell_back)[:10])}"
-              f"{' ...' if len(fell_back) > 10 else ''}", file=sys.stderr)
+              f"using the full-length sequence (--allow-fulllength-dbd) for: "
+              f"{_names(fell_back)}", file=sys.stderr)
+
+    # The run summary names both refusal classes, so a design run cannot
+    # silently lose chassis or silently fuse a whole TF.
+    if skipped_nospan:
+        print(f"SKIPPED {len(skipped_nospan)} DBD(s) with no extracted span "
+              f"(fusing them would build full-length-TF constructs); pass "
+              f"--allow-fulllength-dbd to use them: {_names(skipped_nospan)}",
+              file=sys.stderr)
+    if skipped_flagged:
+        print(f"SKIPPED {len(skipped_flagged)} DBD(s) with dbd_review_flag=1 "
+              f"(an excluded domain lies inside the kept span); pass "
+              f"--allow-flagged-dbd to use them: {_names(skipped_flagged)}",
+              file=sys.stderr)
+    if used_flagged:
+        print(f"WARNING: using {len(used_flagged)} span(s) with "
+              f"dbd_review_flag=1 (--allow-flagged-dbd): {_names(used_flagged)}",
+              file=sys.stderr)
+    print(f"      DBD chassis: {len(dbds)} used, "
+          f"{len(skipped_nospan)} skipped (no span), "
+          f"{len(skipped_flagged)} skipped (flagged).", file=sys.stderr)
+    if not dbds and (skipped_nospan or skipped_flagged):
+        print("ERROR: every DBD in --dbd-input was refused. Re-run the "
+              "eCR_mod_lib extraction, narrow --dbd, or pass "
+              "--allow-fulllength-dbd / --allow-flagged-dbd deliberately.",
+              file=sys.stderr)
+        sys.exit(1)
 
     return dbds, meta
 
@@ -215,7 +294,9 @@ def main(argv: list[str] | None = None) -> None:
     # -------------------------------------------------------------------------
     print("[1/5] Assembling fusion candidates...", file=sys.stderr)
     from ecr_predictor.fusion.assemble import assemble_fusions
-    dbds, dbd_meta = _load_dbds(input_path, args.dbd)
+    dbds, dbd_meta = _load_dbds(input_path, args.dbd,
+                                allow_fulllength=args.allow_fulllength_dbd,
+                                allow_flagged=args.allow_flagged_dbd)
     eds = _load_eds(args.ed)
     linkers = fusion_cfg.get("linkers", [])
     if not dbds or not eds or not linkers:
