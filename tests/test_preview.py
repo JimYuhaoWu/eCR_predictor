@@ -69,7 +69,7 @@ def test_atpm_resolution_arg_overrides_bundle(tmp_path, capsys):
     override = _atpm(tmp_path, "override.tsv")
     out = tmp_path / "o.html"
     main(["--bundle", str(b), "--atpm", override, "--output", str(out)])
-    assert "MEF" in out.read_text()            # used override (MEF/mES), not the bundle's A/B
+    assert "MEF" in out.read_text(encoding="utf-8")   # used override (MEF/mES), not the bundle's A/B
 
 
 def test_atpm_resolution_falls_back_to_bundle(tmp_path):
@@ -81,4 +81,4 @@ def test_atpm_resolution_falls_back_to_bundle(tmp_path):
     Path(_atpm(tmp_path)).replace(b / "accessibility.tsv")
     out = tmp_path / "o2.html"
     main(["--bundle", str(b), "--output", str(out)])
-    assert out.exists() and "__DATA__" not in out.read_text()
+    assert out.exists() and "__DATA__" not in out.read_text(encoding="utf-8")

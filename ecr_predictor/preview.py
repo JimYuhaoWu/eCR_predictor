@@ -267,9 +267,15 @@ def main(argv=None):
         focused_ranks=_read_ranks(args.focused_ranks),
         focused_max=args.focused_max, title=args.title)
 
+    # encoding="utf-8" is required, not tidiness: write_text() otherwise uses
+    # the platform default, which is GBK on a Chinese-locale Windows box, and
+    # render_html() emits U+2212 (the minus sign in the "Predicted = start +
+    # efficacy x (target - start)" caption). That raised UnicodeEncodeError and
+    # wrote no file at all. The HTML declares utf-8 in its own <meta>, so the
+    # bytes have to match.
     if args.data_out:
-        Path(args.data_out).write_text(json.dumps(data))
-    Path(args.output).write_text(render_html(data))
+        Path(args.data_out).write_text(json.dumps(data), encoding="utf-8")
+    Path(args.output).write_text(render_html(data), encoding="utf-8")
     print(f"[preview] {len(data['focused'])} focused rows, {len(data['overview'])} overview, "
           f"{len(data['highlight'])} highlighted -> {args.output}", file=sys.stderr)
 
